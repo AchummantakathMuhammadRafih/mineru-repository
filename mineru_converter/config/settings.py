@@ -63,6 +63,23 @@ class ConversionConfig(BaseModel):
         default=True,
         description="Produce both V1 (_content_list.json) and V2 (_content_list_v2.json) structured lists."
     )
+    generate_clean_markdown: bool = Field(
+        default=True,
+        description="Run dominant font-size hierarchy correction on V2 list to generate duplicate corrected V2 JSON and clean, filtered Markdown."
+    )
+    redact_pii: bool = Field(
+        default=True,
+        description="Redact PII from clean markdown using Microsoft Presidio (masked with stars)."
+    )
+    pii_entities: Optional[List[str]] = Field(
+        default=None,
+        description="List of Presidio entity types to redact. If None, redacts standard PII entities."
+    )
+    pii_score_threshold: Optional[float] = Field(
+        default=0.4,
+        description="Confidence score threshold for PII entity detection."
+    )
+
     dump_middle_json: bool = Field(
         default=True,
         description="Produce MinerU intermediate representation AST (_middle.json)."

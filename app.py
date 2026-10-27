@@ -100,7 +100,7 @@ with st.sidebar:
     if run_embedded:
         # Check if there is a pending job and process 1 file
         if "watcher" not in st.session_state:
-            worker_cfg = ConversionConfig(output_dir=OUTPUT_DIR, dump_images=False)
+            worker_cfg = ConversionConfig(output_dir=OUTPUT_DIR, dump_images=False, redact_pii=True)
             st.session_state["watcher"] = BackgroundWatcher(
                 input_dir=INPUT_DIR,
                 output_dir=OUTPUT_DIR,
@@ -312,6 +312,61 @@ with queue_container:
                 st.session_state["uploader_key"] += 1
                 st.toast(f"Deleted job #{job_id} ({file_name}) and cleared files")
                 st.rerun()
+
+            # Expandable output previews for completed documents
+            if status == JobStatus.COMPLETED and job.get("output_dir"):
+                out_path = Path(job["output_dir"])
+                stem = Path(file_name).stem
+                clean_md = out_path / f"{stem}_clean.md"
+                redacted_md = out_path / f"{stem}_redacted.md"
+                raw_md = out_path / f"{stem}.md"
+
+                if clean_md.exists() or redacted_md.exists() or raw_md.exists():
+                    with st.expander(f"👁️ Preview Document Artifacts (#{job_id} - {file_name})", expanded=False):
+                        tab_redacted, tab_clean, tab_raw = st.tabs([
+                            "🛡️ Redacted Markdown (Presidio)",
+                            "✨ Clean Markdown (Hierarchy)",
+                            "📄 Raw MinerU Markdown",
+                        ])
+                        with tab_redacted:
+                            if redacted_md.exists():
+                                red_text = redacted_md.read_text(encoding="utf-8", errors="replace")
+                                st.download_button(
+                                    "📥 Download Redacted Markdown",
+                                    data=red_text,
+                                    file_name=f"{stem}_redacted.md",
+                                    mime="text/markdown",
+                                    key=f"dl_red_{job_id}",
+                                )
+                                st.markdown(red_text)
+                            else:
+                                st.info("Redacted markdown not found for this document.")
+                        with tab_clean:
+                            if clean_md.exists():
+                                cl_text = clean_md.read_text(encoding="utf-8", errors="replace")
+                                st.download_button(
+                                    "📥 Download Clean Markdown",
+                                    data=cl_text,
+                                    file_name=f"{stem}_clean.md",
+                                    mime="text/markdown",
+                                    key=f"dl_cl_{job_id}",
+                                )
+                                st.markdown(cl_text)
+                            else:
+                                st.info("Clean markdown not found for this document.")
+                        with tab_raw:
+                            if raw_md.exists():
+                                raw_text = raw_md.read_text(encoding="utf-8", errors="replace")
+                                st.download_button(
+                                    "📥 Download Raw Markdown",
+                                    data=raw_text,
+                                    file_name=f"{stem}.md",
+                                    mime="text/markdown",
+                                    key=f"dl_raw_{job_id}",
+                                )
+                                st.markdown(raw_text)
+                            else:
+                                st.info("Raw markdown not found for this document.")
 
 # Auto-refresh loop
 if auto_refresh:

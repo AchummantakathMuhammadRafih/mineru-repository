@@ -28,6 +28,11 @@ class OutputFileManifest(BaseModel):
     images_dir: Optional[Path] = Field(None, description="Directory containing extracted images/tables")
     image_files: List[Path] = Field(default_factory=list, description="List of individual image file paths")
     
+    # Clean / Corrected / Redacted Markdown artifacts
+    clean_markdown_path: Optional[Path] = Field(None, description="Path to _clean.md Markdown document")
+    redacted_markdown_path: Optional[Path] = Field(None, description="Path to _redacted.md Markdown document")
+    corrected_content_list_v2_path: Optional[Path] = Field(None, description="Path to _content_list_v2_corrected.json")
+
     # Meta / summary artifacts
     manifest_path: Optional[Path] = Field(None, description="Path to generated conversion_manifest.json")
     summary_path: Optional[Path] = Field(None, description="Path to generated summary.json")
@@ -37,8 +42,11 @@ class OutputFileManifest(BaseModel):
         files = []
         for p in [
             self.markdown_path,
+            self.clean_markdown_path,
+            self.redacted_markdown_path,
             self.content_list_v1_path,
             self.content_list_v2_path,
+            self.corrected_content_list_v2_path,
             self.middle_json_path,
             self.model_json_path,
             self.layout_pdf_path,
@@ -58,8 +66,11 @@ class OutputFileManifest(BaseModel):
             "document_name": self.document_name,
             "output_directory": str(self.output_directory),
             "markdown": str(self.markdown_path) if self.markdown_path else None,
+            "clean_markdown": str(self.clean_markdown_path) if self.clean_markdown_path else None,
+            "redacted_markdown": str(self.redacted_markdown_path) if self.redacted_markdown_path else None,
             "content_list_v1": str(self.content_list_v1_path) if self.content_list_v1_path else None,
             "content_list_v2": str(self.content_list_v2_path) if self.content_list_v2_path else None,
+            "corrected_content_list_v2": str(self.corrected_content_list_v2_path) if self.corrected_content_list_v2_path else None,
             "middle_json": str(self.middle_json_path) if self.middle_json_path else None,
             "model_json": str(self.model_json_path) if self.model_json_path else None,
             "layout_pdf": str(self.layout_pdf_path) if self.layout_pdf_path else None,
@@ -71,6 +82,7 @@ class OutputFileManifest(BaseModel):
             "manifest_file": str(self.manifest_path) if self.manifest_path else None,
             "summary_file": str(self.summary_path) if self.summary_path else None,
         }
+
 
     class Config:
         arbitrary_types_allowed = True

@@ -21,6 +21,13 @@ from mineru_converter.exporters.postprocessor import (
     normalize_markdown_headers,
     strip_markdown_images,
 )
+from mineru_converter.exporters.hierarchy_corrector import (
+    process_content_list_v2_to_clean_markdown,
+)
+from mineru_converter.exporters.redactor import (
+    redact_markdown_file,
+)
+
 from mineru_converter.models.enums import BackendType, ParseMethod
 from mineru_converter.models.schemas import BatchSummary, ConversionResult, OutputFileManifest
 from mineru_converter.utils.file_utils import ensure_directory, sanitize_filename
@@ -121,6 +128,10 @@ class MinerUConverter:
                 duration_seconds=time.time() - start_time,
             )
 
+        backend_val = cfg.backend.value if hasattr(cfg.backend, "value") else str(cfg.backend)
+        method_val = cfg.method.value if hasattr(cfg.method, "value") else str(cfg.method)
+        effort_val = cfg.effort.value if hasattr(cfg.effort, "value") else str(cfg.effort)
+
         # 3. Execute MinerU parser
         try:
             do_parse(
@@ -128,8 +139,8 @@ class MinerUConverter:
                 pdf_file_names=[doc_stem],
                 pdf_bytes_list=[pdf_bytes],
                 p_lang_list=[cfg.lang],
-                backend=str(cfg.backend),
-                parse_method=str(cfg.method),
+                backend=backend_val,
+                parse_method=method_val,
                 formula_enable=cfg.formula_enable,
                 table_enable=cfg.table_enable,
                 server_url=cfg.server_url,
@@ -145,7 +156,7 @@ class MinerUConverter:
                 end_page_id=eff_end,
                 image_analysis=cfg.image_analysis,
                 client_side_output_generation=cfg.client_side_output_generation,
-                effort=str(cfg.effort),
+                effort=effort_val,
             )
         except Exception as parse_err:
             logger.exception(f"MinerU execution error on {pdf_file.name}: {parse_err}")
@@ -168,7 +179,7 @@ class MinerUConverter:
         # MinerU puts files into output_dir / doc_stem / method (or similar)
         # Check standard subdirectories
         actual_doc_dir = None
-        method_str = str(cfg.method)
+        method_str = method_val
         possible_dirs = [
             target_root_dir / doc_stem / method_str,
             target_root_dir / doc_stem / "auto",
@@ -177,6 +188,7 @@ class MinerUConverter:
             target_root_dir / doc_stem / "pipeline",
             target_root_dir / doc_stem,
         ]
+
         for p_dir in possible_dirs:
             if p_dir.exists() and any(p_dir.iterdir()):
                 actual_doc_dir = p_dir
@@ -208,6 +220,45 @@ class MinerUConverter:
         # 7. Strip image tags from Markdown if image saving is disabled
         if not cfg.dump_images and manifest.markdown_path and manifest.markdown_path.exists():
             strip_markdown_images(manifest.markdown_path)
+
+        # 8. Generate clean markdown and duplicate corrected V2 list if enabled
+        if cfg.generate_clean_markdown and manifest.content_list_v2_path and manifest.content_list_v2_path.exists():
+            pdf_source_for_fonts = manifest.origin_pdf_path if (manifest.origin_pdf_path and manifest.origin_pdf_path.exists()) else pdf_file
+            try:
+                corr_v2_path, clean_md_path, _ = process_content_list_v2_to_clean_markdown(
+                    v2_json_path=manifest.content_list_v2_path,
+                    pdf_path=pdf_source_for_fonts,
+                    filter_images=True,
+                    include_footnotes=False,
+                )
+                manifest.corrected_content_list_v2_path = corr_v2_path
+                manifest.clean_markdown_path = clean_md_path
+            except Exception as clean_err:
+                logger.warning(f"Could not generate clean markdown for {pdf_file.name}: {clean_err}")
+
+        # 9. Redact clean markdown with Microsoft Presidio (masked with stars) if enabled
+        if cfg.redact_pii:
+            source_md_for_redaction = (
+                manifest.clean_markdown_path
+                if (manifest.clean_markdown_path and manifest.clean_markdown_path.exists())
+                else manifest.markdown_path
+            )
+            if source_md_for_redaction and source_md_for_redaction.exists():
+                try:
+                    redacted_md_path, redact_summary = redact_markdown_file(
+                        input_clean_md_path=source_md_for_redaction,
+                        entities=cfg.pii_entities,
+                        score_threshold=cfg.pii_score_threshold,
+                        language="en",
+                    )
+                    manifest.redacted_markdown_path = redacted_md_path
+                    logger.info(
+                        f"PII Redaction complete for {pdf_file.name}: "
+                        f"{redact_summary.get('total_redactions', 0)} entity/entities masked -> {redacted_md_path.name}"
+                    )
+                except Exception as redact_err:
+                    logger.warning(f"Could not redact markdown for {pdf_file.name}: {redact_err}")
+
 
         elapsed = time.time() - start_time
         end_dt = datetime.utcnow()

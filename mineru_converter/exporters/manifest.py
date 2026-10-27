@@ -58,6 +58,22 @@ def build_output_manifest(
     if cl2_file.exists():
         manifest.content_list_v2_path = cl2_file
 
+    # Resolve Corrected Content List V2
+    cl2_corr_file = output_directory / f"{doc_stem}_content_list_v2_corrected.json"
+    if cl2_corr_file.exists():
+        manifest.corrected_content_list_v2_path = cl2_corr_file
+
+    # Resolve Clean Markdown
+    clean_md_file = output_directory / f"{doc_stem}_clean.md"
+    if clean_md_file.exists():
+        manifest.clean_markdown_path = clean_md_file
+
+    # Resolve Redacted Markdown
+    redacted_md_file = output_directory / f"{doc_stem}_redacted.md"
+    if redacted_md_file.exists():
+        manifest.redacted_markdown_path = redacted_md_file
+
+
     # Resolve Middle JSON
     mid_file = output_directory / f"{doc_stem}{SUFFIX_MIDDLE_JSON}"
     if mid_file.exists():
