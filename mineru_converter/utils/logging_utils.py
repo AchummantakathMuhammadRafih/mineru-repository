@@ -42,7 +42,7 @@ def add_file_handler_to_loggers(
     file_handler.setFormatter(formatter)
     file_handler.setLevel(level)
 
-    names = logger_names or [LOGGER_NAME, "uvicorn", "uvicorn.access", "uvicorn.error"]
+    names = logger_names or [LOGGER_NAME, "uvicorn", "uvicorn.error"]
     for name in names:
         l = logging.getLogger(name)
         # Avoid duplicate handlers for this exact file
@@ -52,6 +52,12 @@ def add_file_handler_to_loggers(
         )
         if not already_has:
             l.addHandler(file_handler)
+
+    # Explicitly silence uvicorn.access so HTTP request access logs do not pollute server.log
+    access_logger = logging.getLogger("uvicorn.access")
+    access_logger.handlers.clear()
+    access_logger.propagate = False
+    access_logger.setLevel(logging.WARNING)
 
     return file_handler
 

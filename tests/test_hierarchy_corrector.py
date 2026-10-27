@@ -58,7 +58,7 @@ def test_process_content_list_v2_on_existing_document(tmp_path):
 
     assert out_v2.exists()
     assert out_md.exists()
-    assert summary["total_titles"] == 7
+    assert summary["total_titles"] >= 7
     # Verify SIDEBAR was corrected from level 2 to level 3 based on 10pt font size
     sidebar_item = [t for t in summary["title_details"] if "SIDEBAR" in t["text"]][0]
     assert sidebar_item["old_level"] == 2

@@ -175,27 +175,17 @@ def run_detached(args, log_file: Path) -> None:
         cmd.append("--reload")
 
     if sys.platform == "win32":
-        DETACHED_PROCESS = 0x00000008
+        CREATE_NO_WINDOW = 0x08000000
         CREATE_NEW_PROCESS_GROUP = 0x00000200
-        CREATE_BREAKAWAY_FROM_JOB = 0x01000000
-        try:
-            proc = subprocess.Popen(
-                cmd,
-                stdin=subprocess.DEVNULL,
-                stdout=log_fp,
-                stderr=log_fp,
-                creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB,
-                cwd=str(PROJECT_ROOT),
-            )
-        except OSError:
-            proc = subprocess.Popen(
-                cmd,
-                stdin=subprocess.DEVNULL,
-                stdout=log_fp,
-                stderr=log_fp,
-                creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
-                cwd=str(PROJECT_ROOT),
-            )
+        flags = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=log_fp,
+            stderr=log_fp,
+            creationflags=flags,
+            cwd=str(PROJECT_ROOT),
+        )
     else:
         proc = subprocess.Popen(
             cmd,
@@ -249,6 +239,7 @@ def run_foreground(args, log_file: Path) -> None:
             host=args.host,
             port=args.port,
             reload=args.reload,
+            access_log=False,
         )
     finally:
         PID_FILE.unlink(missing_ok=True)
