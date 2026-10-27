@@ -7,6 +7,10 @@ Markdown generation, V1/V2 Content Lists, AST Middle JSON, visual bounding box o
 and structured media extraction using MinerU.
 """
 
+# Apply third-party compatibility patches (e.g. transformers >= 4.45 / 5.x get_head_mask)
+from mineru_converter.core.patches import apply_transformers_compat_patches
+apply_transformers_compat_patches()
+
 from mineru_converter.config.settings import ConversionConfig
 from mineru_converter.config.constants import (
     BackendType,

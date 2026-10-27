@@ -2,7 +2,10 @@
 
 import logging
 import sys
-from typing import Optional
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
+from typing import List, Optional, Union
+
 from rich.console import Console
 from rich.logging import RichHandler
 
@@ -12,13 +15,54 @@ err_console = Console(color_system="auto", stderr=True)
 LOGGER_NAME = "mineru_converter"
 
 
+def add_file_handler_to_loggers(
+    log_file: Union[str, Path],
+    logger_names: Optional[List[str]] = None,
+    max_bytes: int = 10 * 1024 * 1024,
+    backup_count: int = 5,
+    level: int = logging.INFO,
+) -> RotatingFileHandler:
+    """
+    Attach a thread-safe rotating file handler to the specified loggers
+    (defaults to mineru_converter, uvicorn, uvicorn.access, and uvicorn.error).
+    """
+    log_path = Path(log_file).resolve()
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    file_handler = RotatingFileHandler(
+        str(log_path),
+        maxBytes=max_bytes,
+        backupCount=backup_count,
+        encoding="utf-8",
+    )
+    formatter = logging.Formatter(
+        "%(asctime)s [%(levelname)s] [%(name)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    file_handler.setFormatter(formatter)
+    file_handler.setLevel(level)
+
+    names = logger_names or [LOGGER_NAME, "uvicorn", "uvicorn.access", "uvicorn.error"]
+    for name in names:
+        l = logging.getLogger(name)
+        # Avoid duplicate handlers for this exact file
+        already_has = any(
+            isinstance(h, RotatingFileHandler) and Path(getattr(h, "baseFilename", "")).resolve() == log_path
+            for h in l.handlers
+        )
+        if not already_has:
+            l.addHandler(file_handler)
+
+    return file_handler
+
+
 def setup_logger(
     verbose: bool = False,
     quiet: bool = False,
-    log_file: Optional[str] = None
+    log_file: Optional[Union[str, Path]] = None,
 ) -> logging.Logger:
     """
-    Configure and return application logger with Rich formatting.
+    Configure and return application logger with Rich formatting and optional rotating file logging.
     
     Args:
         verbose: If True, set level to DEBUG.
@@ -49,13 +93,7 @@ def setup_logger(
 
     # Optional file logger
     if log_file:
-        file_handler = logging.FileHandler(log_file, encoding="utf-8")
-        file_formatter = logging.Formatter(
-            "%(asctime)s [%(levelname)s] %(name)s (%(filename)s:%(lineno)d): %(message)s"
-        )
-        file_handler.setFormatter(file_formatter)
-        file_handler.setLevel(logging.DEBUG)
-        logger.addHandler(file_handler)
+        add_file_handler_to_loggers(log_file, logger_names=[LOGGER_NAME], level=logging.DEBUG if verbose else logging.INFO)
 
     logger.propagate = False
     return logger
@@ -64,3 +102,4 @@ def setup_logger(
 def get_logger() -> logging.Logger:
     """Retrieve current package logger."""
     return logging.getLogger(LOGGER_NAME)
+

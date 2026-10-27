@@ -19,7 +19,7 @@ from mineru_converter.config.settings import ConversionConfig
 from mineru_converter.core.database import JobDatabase, JobStatus, JobStep
 from mineru_converter.core.queue_worker import QueueWorker
 from mineru_converter.utils.file_utils import format_file_size, sanitize_filename
-from mineru_converter.utils.logging_utils import get_logger
+from mineru_converter.utils.logging_utils import add_file_handler_to_loggers, get_logger
 from mineru_converter.utils.zip_utils import create_job_zip
 
 logger = get_logger()
@@ -29,6 +29,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 INPUT_DIR = PROJECT_ROOT / "input"
 OUTPUT_DIR = PROJECT_ROOT / "output"
 DB_PATH = OUTPUT_DIR / "mineru_jobs.db"
+DEFAULT_LOG_FILE = PROJECT_ROOT / "server.log"
 
 INPUT_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -55,9 +56,13 @@ def get_worker() -> QueueWorker:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager to start and stop background queue worker."""
+    # Ensure logs write to server.log in the project root
+    add_file_handler_to_loggers(DEFAULT_LOG_FILE)
+    from mineru_converter.core.patches import apply_transformers_compat_patches
+    apply_transformers_compat_patches()
     worker = get_worker()
     worker.start()
-    logger.info("MinerU Server started successfully with background QueueWorker.")
+    logger.info(f"MinerU Server started successfully (logging to {DEFAULT_LOG_FILE.name}).")
     try:
         yield
     finally:
@@ -376,7 +381,25 @@ def health_check():
         "input_directory": str(INPUT_DIR),
         "output_directory": str(OUTPUT_DIR),
         "database_file": str(DB_PATH),
+        "log_file": str(DEFAULT_LOG_FILE),
     }
+
+
+@app.get("/api/logs")
+def get_logs(tail: int = Query(100, ge=1, le=1000)):
+    """Retrieve the latest lines from the server log file."""
+    if not DEFAULT_LOG_FILE.exists():
+        return {"log_file": str(DEFAULT_LOG_FILE), "total_lines": 0, "lines": []}
+    try:
+        with open(DEFAULT_LOG_FILE, "r", encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+            return {
+                "log_file": str(DEFAULT_LOG_FILE),
+                "total_lines": len(lines),
+                "lines": [line.rstrip() for line in lines[-tail:]],
+            }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to read log file: {exc}")
 
 
 # ------------------------------------------------------------------------------

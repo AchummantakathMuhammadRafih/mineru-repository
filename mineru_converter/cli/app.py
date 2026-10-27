@@ -405,13 +405,30 @@ def info_cmd():
 @click.option("--host", default="0.0.0.0", show_default=True, help="Bind host address.")
 @click.option("--port", default=8000, show_default=True, type=int, help="Bind port number.")
 @click.option("--reload", is_flag=True, default=False, help="Enable auto-reload for development.")
-def server_cmd(host: str, port: int, reload: bool):
+@click.option("-d", "--detach", is_flag=True, default=False, help="Run server in background detached mode.")
+@click.option("--stop", is_flag=True, default=False, help="Stop currently running detached server.")
+@click.option("--status", is_flag=True, default=False, help="Check detached server process status.")
+@click.option("--log-file", type=click.Path(dir_okay=False, path_type=Path), default=None, help="Custom log file path.")
+def server_cmd(host: str, port: int, reload: bool, detach: bool, stop: bool, status: bool, log_file: Optional[Path]):
     """Start the asynchronous MinerU conversion API server with background queue worker & Web UI."""
-    print_banner()
-    import uvicorn
-    console.print(f"[bold green]🚀 Starting MinerU Async Server on http://{host}:{port}[/bold green]")
-    console.print(f"  • Web Dashboard: [bold cyan]http://localhost:{port}/[/bold cyan]")
-    console.print(f"  • Swagger API Docs: [bold cyan]http://localhost:{port}/docs[/bold cyan]")
-    console.print("  • Queue Pipeline: Upload -> Async Worker Thread (FIFO) -> MinerU Parse -> Hierarchy Correction -> Presidio PII Redaction")
-    uvicorn.run("mineru_converter.server.app:app", host=host, port=port, reload=reload)
+    from server import DEFAULT_LOG_FILE, run_detached, run_foreground, show_status, stop_server
+    import argparse
+
+    if stop:
+        stop_server()
+        return
+
+    if status:
+        show_status()
+        return
+
+    target_log = log_file or DEFAULT_LOG_FILE
+    args = argparse.Namespace(host=host, port=port, reload=reload)
+
+    if detach:
+        run_detached(args, target_log)
+    else:
+        print_banner()
+        run_foreground(args, target_log)
+
 

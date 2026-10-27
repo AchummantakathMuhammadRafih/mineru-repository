@@ -1,10 +1,15 @@
 """Integration tests for FastAPI conversion server."""
 
 import io
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from fastapi.testclient import TestClient
 
@@ -119,6 +124,25 @@ class TestServerAPI(unittest.TestCase):
         not_found_resp = self.client.get(f"/api/jobs/{job_id}")
         self.assertEqual(not_found_resp.status_code, 404)
 
+    def test_get_logs(self):
+        """Verify /api/logs retrieves lines from the server log file."""
+        log_resp = self.client.get("/api/logs?tail=50")
+        self.assertEqual(log_resp.status_code, 200)
+        data = log_resp.json()
+        self.assertIn("log_file", data)
+        self.assertIn("lines", data)
+        self.assertIsInstance(data["lines"], list)
+
+    def test_detached_helpers(self):
+        """Verify server.py helper methods is_process_running and PID operations."""
+        import server
+        # Current process should be running
+        self.assertTrue(server.is_process_running(server.os.getpid()))
+        # Non-existent or invalid PID should return False
+        self.assertFalse(server.is_process_running(999999))
+        self.assertFalse(server.is_process_running(-1))
+
 
 if __name__ == "__main__":
     unittest.main()
+

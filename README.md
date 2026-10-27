@@ -90,16 +90,42 @@ mineru-convert batch ./input -o ./output/batch_results
 ```
 
 ### 5. Asynchronous Conversion Server & Web Dashboard 🚀
-Run everything as a unified, asynchronous server with a dedicated background worker thread, REST API, interactive Swagger docs, and built-in glassmorphic Web UI:
+Run everything as a unified, asynchronous server with a dedicated background worker thread, REST API, interactive Swagger docs, and built-in glassmorphic Web UI.
+
+#### Running in Detached Mode (Background Daemon)
+Run the server in the background completely detached from the current terminal:
 ```bash
-# Start server using server.py
+# Start in detached mode (writes logs to server.log, tracks PID in server.pid)
+python server.py --detach
+
+# Or via CLI
+mineru-convert server --detach
+
+# Check if the detached server is running
+python server.py --status
+
+# Stop the detached server
+python server.py --stop
+```
+
+#### Running in Interactive Mode (Foreground)
+```bash
+# Start in foreground
 python server.py --host 0.0.0.0 --port 8000
 
 # Or using the CLI command
 mineru-convert server --port 8000
 ```
-- 🌐 **Web Dashboard**: `http://localhost:8000/` (Drag-and-drop upload, live polling table, step indicators, and artifact preview tabs).
-- 📖 **Swagger API Docs**: `http://localhost:8000/docs`
+
+#### Monitoring Logs
+- 📜 **Log File**: All server requests and pipeline worker steps are logged to [`server.log`](file:///c:/Users/Muhammad.Rafih/Code/mineru-parser/server.log) with automatic rotating file backups.
+- 💻 **Follow Live in Terminal**:
+  - PowerShell: `Get-Content -Wait server.log`
+  - Linux/Git Bash: `tail -f server.log`
+- 🌐 **Web & API Access**:
+  - Web Dashboard: `http://localhost:8000/` (Drag-and-drop upload, live polling table, step indicators, and artifact preview tabs).
+  - Interactive Swagger Docs: `http://localhost:8000/docs`
+  - Direct Log API: `http://localhost:8000/api/logs?tail=100`
 - ⚡ **Sequential FIFO Processing**: An asynchronous background worker thread picks up pending jobs **strictly one at a time**, executing:
   1. **Upload & Enqueue** (`POST /api/upload`)
   2. **MinerU Parser Execution** (`Step: PARSING`)

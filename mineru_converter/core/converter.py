@@ -7,6 +7,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, List, Optional, Union
 
+from mineru_converter.core.patches import apply_transformers_compat_patches
+apply_transformers_compat_patches()
+
 from mineru.cli.common import do_parse, MakeMode
 
 from mineru_converter.config.settings import ConversionConfig
