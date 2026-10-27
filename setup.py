@@ -18,6 +18,9 @@ setup(
         "presidio-analyzer>=2.2.0",
         "presidio-anonymizer>=2.2.0",
         "spacy>=3.7.0",
+        "fastapi>=0.100.0",
+        "uvicorn>=0.20.0",
+        "python-multipart>=0.0.6",
     ],
     extras_require={
         "dev": [
@@ -28,6 +31,7 @@ setup(
         "console_scripts": [
             "mineru-convert=mineru_converter.cli.app:cli",
             "mineru-converter=mineru_converter.cli.app:cli",
+            "mineru-server=server:main",
         ],
     },
     classifiers=[

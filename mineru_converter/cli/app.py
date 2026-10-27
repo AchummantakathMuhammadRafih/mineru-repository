@@ -399,3 +399,19 @@ def info_cmd():
     console.print(f"* [bold]mineru.json Config:[/bold] {'[green]Exists[/green]' if mineru_json.exists() else '[yellow]Not Found[/yellow]'}")
     hf_cache = home / ".cache" / "huggingface" / "hub"
     console.print(f"* [bold]HuggingFace Cache:[/bold] {hf_cache} ({'[green]Found[/green]' if hf_cache.exists() else '[yellow]Not Found[/yellow]'})")
+
+
+@cli.command("server")
+@click.option("--host", default="0.0.0.0", show_default=True, help="Bind host address.")
+@click.option("--port", default=8000, show_default=True, type=int, help="Bind port number.")
+@click.option("--reload", is_flag=True, default=False, help="Enable auto-reload for development.")
+def server_cmd(host: str, port: int, reload: bool):
+    """Start the asynchronous MinerU conversion API server with background queue worker & Web UI."""
+    print_banner()
+    import uvicorn
+    console.print(f"[bold green]🚀 Starting MinerU Async Server on http://{host}:{port}[/bold green]")
+    console.print(f"  • Web Dashboard: [bold cyan]http://localhost:{port}/[/bold cyan]")
+    console.print(f"  • Swagger API Docs: [bold cyan]http://localhost:{port}/docs[/bold cyan]")
+    console.print("  • Queue Pipeline: Upload -> Async Worker Thread (FIFO) -> MinerU Parse -> Hierarchy Correction -> Presidio PII Redaction")
+    uvicorn.run("mineru_converter.server.app:app", host=host, port=port, reload=reload)
+

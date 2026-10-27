@@ -89,7 +89,25 @@ Convert all PDFs in a directory recursively:
 mineru-convert batch ./input -o ./output/batch_results
 ```
 
-### 5. Background Runner (Folder Watcher & SQLite Queue)
+### 5. Asynchronous Conversion Server & Web Dashboard 🚀
+Run everything as a unified, asynchronous server with a dedicated background worker thread, REST API, interactive Swagger docs, and built-in glassmorphic Web UI:
+```bash
+# Start server using server.py
+python server.py --host 0.0.0.0 --port 8000
+
+# Or using the CLI command
+mineru-convert server --port 8000
+```
+- 🌐 **Web Dashboard**: `http://localhost:8000/` (Drag-and-drop upload, live polling table, step indicators, and artifact preview tabs).
+- 📖 **Swagger API Docs**: `http://localhost:8000/docs`
+- ⚡ **Sequential FIFO Processing**: An asynchronous background worker thread picks up pending jobs **strictly one at a time**, executing:
+  1. **Upload & Enqueue** (`POST /api/upload`)
+  2. **MinerU Parser Execution** (`Step: PARSING`)
+  3. **Dominant Font Hierarchy Correction** (`Step: HIERARCHY_CORRECTION` -> produces clean Markdown `*_clean.md`)
+  4. **Presidio PII Redaction** (`Step: REDACTION` -> masks sensitive entities with stars `*_redacted.md`)
+  5. **Artifacts & Download** (`GET /api/jobs/{id}/download` for complete ZIP package)
+
+### 6. Background Folder Runner (CLI Watcher)
 Listen to an input directory, process files strictly **one at a time** (FIFO), route outputs to the destination directory, and persist execution states (`PENDING`, `PROCESSING`, `COMPLETED`, `FAILED`) in SQLite:
 ```bash
 # Start listening to ./input (default output ./output/mineru, DB: ./output/mineru/mineru_jobs.db)
@@ -108,19 +126,10 @@ mineru-convert jobs --db-path ./output/mineru_jobs.db
 mineru-convert jobs --status COMPLETED
 ```
 
-### 6. Web UI (Streamlit Upload & Downloader)
-Launch the interactive web application to upload files to `input/`, monitor live queue status from SQLite, and download complete bundled ZIP packages:
+### 7. Streamlit Web UI
+Alternatively, launch the Streamlit frontend:
 ```bash
 streamlit run app.py
-```
-- **Upload**: Drop one or multiple PDF documents directly into the queue.
-- **Sequential Processing**: Files are processed one at a time.
-- **Download**: Once marked `COMPLETED`, click **📦 Download ZIP** (`<filename>.zip`) containing both the original uploaded PDF and all converted MinerU outputs (`.md`, `images/`, `content_list.json`, etc.).
-
-### 7. Inspect Converted Output
-Inspect and review artifacts generated for a document:
-```bash
-mineru-convert inspect output/results/document/auto
 ```
 
 ### 8. Environment & GPU Info

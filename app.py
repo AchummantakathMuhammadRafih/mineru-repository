@@ -247,14 +247,18 @@ with queue_container:
             else:
                 row_cols[1].markdown(f"**{file_name}**")
 
-            # Status badge
+            # Status badge with granular pipeline step
             badge_class = {
                 JobStatus.COMPLETED: "status-completed",
                 JobStatus.PROCESSING: "status-processing",
                 JobStatus.PENDING: "status-pending",
                 JobStatus.FAILED: "status-failed",
             }.get(status, "status-pending")
-            row_cols[2].markdown(f'<span class="status-badge {badge_class}">{status}</span>', unsafe_allow_html=True)
+            step_str = job.get("current_step") or ("COMPLETED" if status == JobStatus.COMPLETED else "QUEUED")
+            row_cols[2].markdown(
+                f'<span class="status-badge {badge_class}">{status}</span><br><small style="color: #64748B; font-size: 0.72rem; font-family: monospace;">{step_str}</small>',
+                unsafe_allow_html=True,
+            )
 
             # Duration & Timestamp
             row_cols[3].write(duration)

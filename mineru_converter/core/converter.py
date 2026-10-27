@@ -5,7 +5,7 @@ import shutil
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import Callable, List, Optional, Union
 
 from mineru.cli.common import do_parse, MakeMode
 
@@ -55,7 +55,8 @@ class MinerUConverter:
     def convert(
         self,
         input_path: Union[str, Path],
-        override_config: Optional[ConversionConfig] = None
+        override_config: Optional[ConversionConfig] = None,
+        step_callback: Optional[Callable[[str], None]] = None,
     ) -> ConversionResult:
         """
         Convert a single PDF file into all MinerU artifact formats.
@@ -133,6 +134,9 @@ class MinerUConverter:
         effort_val = cfg.effort.value if hasattr(cfg.effort, "value") else str(cfg.effort)
 
         # 3. Execute MinerU parser
+        if step_callback:
+            step_callback("PARSING")
+
         try:
             do_parse(
                 output_dir=str(target_root_dir),
@@ -222,6 +226,9 @@ class MinerUConverter:
             strip_markdown_images(manifest.markdown_path)
 
         # 8. Generate clean markdown and duplicate corrected V2 list if enabled
+        if step_callback:
+            step_callback("HIERARCHY_CORRECTION")
+
         if cfg.generate_clean_markdown and manifest.content_list_v2_path and manifest.content_list_v2_path.exists():
             pdf_source_for_fonts = manifest.origin_pdf_path if (manifest.origin_pdf_path and manifest.origin_pdf_path.exists()) else pdf_file
             try:
@@ -237,6 +244,9 @@ class MinerUConverter:
                 logger.warning(f"Could not generate clean markdown for {pdf_file.name}: {clean_err}")
 
         # 9. Redact clean markdown with Microsoft Presidio (masked with stars) if enabled
+        if step_callback:
+            step_callback("REDACTION")
+
         if cfg.redact_pii:
             source_md_for_redaction = (
                 manifest.clean_markdown_path
@@ -289,6 +299,9 @@ class MinerUConverter:
             f"Successfully converted [bold green]{pdf_file.name}[/bold green] in {elapsed:.2f}s "
             f"({len(manifest.all_files())} files generated)"
         )
+
+        if step_callback:
+            step_callback("COMPLETED")
 
         return ConversionResult(
             success=True,
