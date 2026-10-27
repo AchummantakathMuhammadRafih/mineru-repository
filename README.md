@@ -192,9 +192,12 @@ When converting `MyDocument.pdf`, the output folder contains:
 
 | Artifact | File Name | Description |
 |---|---|---|
-| **Markdown** | `MyDocument.md` | Clean GitHub-flavored Markdown with equations formatted in LaTeX (`$...$`, `$$...$$`) and image references. |
+| **Raw Markdown** | `MyDocument.md` | Standard MinerU Markdown with equations formatted in LaTeX (`$...$`, `$$...$$`) and image references. |
+| **Clean Markdown** | `MyDocument_clean.md` | Hierarchy-corrected Markdown with normalized heading levels (`#`, `##`, `###`) and filtered noise (headers/footers/images stripped). |
+| **Redacted Markdown** | `MyDocument_redacted.md` | PII-redacted Markdown produced via Microsoft Presidio, with sensitive entities masked 1:1 with asterisks (`*`). |
 | **Content List V1** | `MyDocument_content_list.json` | Stream of page items (text, table, equation, image) compatible with MinerU v1 integrations. |
-| **Content List V2** | `MyDocument_content_list_v2.json` | Detailed structured stream with bounding boxes, font attributes, table cells, and caption relationships. |
+| **Content List V2** | `MyDocument_content_list_v2.json` | Original MinerU structured stream with bounding boxes, font attributes, table cells, and caption relationships. |
+| **Corrected Content List V2** | `MyDocument_content_list_v2_corrected.json` | Duplicate V2 JSON structure with `"level"` values corrected according to dominant PDF font sizes. |
 | **Middle AST** | `MyDocument_middle.json` | The intermediate document AST produced by MinerU layout analysis, containing block positions, spans, and raw OCR text. |
 | **Model Output** | `MyDocument_model.json` | Raw output from layout detection models (YOLO/PP-DocLayout, Unimernet, etc.). |
 | **Layout Visual** | `MyDocument_layout.pdf` | Visual PDF with highlighted bounding boxes for layout blocks (Title, Text, Table, Figure). |
@@ -221,6 +224,8 @@ When converting `MyDocument.pdf`, the output folder contains:
 | `--end-page` | `-e` | `None` | End page index (0-indexed, inclusive) |
 | `--no-formula` | | `False` | Disable formula extraction |
 | `--no-table` | | `False` | Disable table extraction |
+| `--no-images` | | `False` | Skip saving extracted images to disk and strip images from markdown |
+| `--no-redact` | | `False` | Skip PII redaction with Microsoft Presidio |
 | `--no-layout-pdf` | | `False` | Skip generating `_layout.pdf` |
 | `--no-span-pdf` | | `False` | Skip generating `_span.pdf` |
 | `--no-manifest` | | `False` | Skip generating `conversion_manifest.json` |
@@ -232,7 +237,7 @@ When converting `MyDocument.pdf`, the output folder contains:
 
 ## ☁️ Remote VM Deployment Setup
 
-To deploy on a fresh remote Linux/Ubuntu VM (GPU or CPU) without runtime model download issues, use the automated setup script [`setup_vm.sh`](file:///c:/Users/Muhammad.Rafih/Code/mineru-parser/setup_vm.sh):
+To deploy on a fresh remote Linux/Ubuntu VM (GPU or CPU) without missing dependencies, use the automated setup script [`setup_vm.sh`](file:///c:/Users/Muhammad.Rafih/Code/mineru-parser/setup_vm.sh):
 
 ```bash
 chmod +x setup_vm.sh
@@ -240,12 +245,13 @@ chmod +x setup_vm.sh
 ```
 
 This script:
-1. Installs OS libraries (`libgl1-mesa-glx`, `libglib2.0-0`, `poppler-utils`, `ffmpeg`).
+1. Installs OS libraries (`libgl1`, `libglib2.0-0`, `poppler-utils`, `ffmpeg`, `build-essential`, `python3-dev`).
 2. Creates and activates a Python virtual environment (`.venv`).
 3. Detects NVIDIA GPU via `nvidia-smi` and installs matching CUDA PyTorch (or CPU PyTorch).
-4. Installs `mineru-converter` in editable mode (`pip install -e .`).
-5. Pre-downloads all MinerU pipeline model weights (`mineru-models-download -s huggingface -m pipeline`).
-6. Runs `mineru-convert info` to verify environment and model paths.
+4. Installs `mineru-converter` and all dependencies (`pymupdf`, `presidio-analyzer`, `presidio-anonymizer`, `spacy`, `streamlit`, `pytest`).
+5. Downloads the spaCy English model (`en_core_web_sm`) required for Presidio PII analysis.
+6. Pre-downloads all MinerU pipeline model weights (`mineru-models-download -s huggingface -m pipeline`).
+7. Verifies MinerU CLI, PyMuPDF font extraction, and Presidio PII redaction.
 
 ---
 
