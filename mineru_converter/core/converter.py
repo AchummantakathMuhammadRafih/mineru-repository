@@ -140,6 +140,13 @@ class MinerUConverter:
         if step_callback:
             step_callback("PARSING")
 
+        parse_start_time = time.time()
+        logger.info(
+            f"⚙️ [MinerU Parser] Starting parsing engine for '{doc_stem}' "
+            f"(backend={backend_val}, method={method_val}, pages={processed_pages}, "
+            f"formula={cfg.formula_enable}, table={cfg.table_enable})..."
+        )
+
         try:
             do_parse(
                 output_dir=str(target_root_dir),
@@ -165,6 +172,8 @@ class MinerUConverter:
                 client_side_output_generation=cfg.client_side_output_generation,
                 effort=effort_val,
             )
+            parse_dur = time.time() - parse_start_time
+            logger.info(f"✓ [MinerU Parser] Core document parse completed in {parse_dur:.2f}s for '{doc_stem}'.")
         except Exception as parse_err:
             logger.exception(f"MinerU execution error on {pdf_file.name}: {parse_err}")
             empty_manifest = OutputFileManifest(
@@ -204,13 +213,15 @@ class MinerUConverter:
         if actual_doc_dir is None:
             actual_doc_dir = target_root_dir / doc_stem / method_str
 
+        logger.info(f"📂 [MinerU Parser] Output directory resolved: {actual_doc_dir}")
+
         # If image saving is disabled, remove the extracted images folder
         if not cfg.dump_images:
             images_dir = actual_doc_dir / "images"
             if images_dir.exists() and images_dir.is_dir():
                 try:
                     shutil.rmtree(images_dir)
-                    logger.debug(f"Removed images directory: {images_dir}")
+                    logger.info(f"🖼️ [MinerU Parser] Removed images directory: {images_dir.name}")
                 except Exception as rm_err:
                     logger.warning(f"Could not remove images directory: {rm_err}")
 
@@ -218,6 +229,12 @@ class MinerUConverter:
         manifest = build_output_manifest(
             output_directory=actual_doc_dir,
             doc_stem=doc_stem
+        )
+        logger.info(
+            f"📦 [MinerU Parser] Artifacts generated: "
+            f"markdown={manifest.markdown_path.name if manifest.markdown_path else 'none'}, "
+            f"v1_json={manifest.content_list_v1_path.name if manifest.content_list_v1_path else 'none'}, "
+            f"v2_json={manifest.content_list_v2_path.name if manifest.content_list_v2_path else 'none'}"
         )
 
         # 6. Normalize Markdown headers if requested (elevate first header to top H1 level)
@@ -235,14 +252,36 @@ class MinerUConverter:
         if cfg.generate_clean_markdown and manifest.content_list_v2_path and manifest.content_list_v2_path.exists():
             pdf_source_for_fonts = manifest.origin_pdf_path if (manifest.origin_pdf_path and manifest.origin_pdf_path.exists()) else pdf_file
             try:
-                corr_v2_path, clean_md_path, _ = process_content_list_v2_to_clean_markdown(
+                if cfg.use_llm_hierarchy:
+                    logger.info(
+                        f"🤖 [Hierarchy] Running LLM-based hierarchy correction for {pdf_file.name} "
+                        f"(deployment={cfg.azure_openai_deployment or 'default'})..."
+                    )
+                else:
+                    logger.info(
+                        f"📐 [Hierarchy] Running font-size heuristic hierarchy correction for {pdf_file.name}..."
+                    )
+
+                corr_v2_path, clean_md_path, summary = process_content_list_v2_to_clean_markdown(
                     v2_json_path=manifest.content_list_v2_path,
                     pdf_path=pdf_source_for_fonts,
                     filter_images=True,
                     include_footnotes=False,
+                    use_llm=cfg.use_llm_hierarchy,
+                    azure_endpoint=cfg.azure_openai_endpoint,
+                    azure_api_key=cfg.azure_openai_api_key,
+                    azure_deployment=cfg.azure_openai_deployment,
+                    azure_api_version=cfg.azure_openai_api_version,
+                    temperature=cfg.llm_temperature,
+                    timeout=cfg.llm_timeout,
                 )
                 manifest.corrected_content_list_v2_path = corr_v2_path
                 manifest.clean_markdown_path = clean_md_path
+                logger.info(
+                    f"✓ [Hierarchy] Completed for {pdf_file.name} "
+                    f"using strategy: {summary.get('method', 'heuristics')} "
+                    f"({summary.get('corrected_count', 0)}/{summary.get('total_titles', 0)} headings corrected)"
+                )
             except Exception as clean_err:
                 logger.warning(f"Could not generate clean markdown for {pdf_file.name}: {clean_err}")
 
@@ -258,20 +297,22 @@ class MinerUConverter:
             )
             if source_md_for_redaction and source_md_for_redaction.exists():
                 try:
+                    logger.info(f"🔒 [Presidio Redaction] Redacting sensitive PII from {source_md_for_redaction.name}...")
+                    redact_t0 = time.time()
                     redacted_md_path, redact_summary = redact_markdown_file(
                         input_clean_md_path=source_md_for_redaction,
                         entities=cfg.pii_entities,
                         score_threshold=cfg.pii_score_threshold,
                         language="en",
                     )
+                    redact_dur = time.time() - redact_t0
                     manifest.redacted_markdown_path = redacted_md_path
                     logger.info(
-                        f"PII Redaction complete for {pdf_file.name}: "
+                        f"✓ [Presidio Redaction] Redaction finished in {redact_dur:.2f}s: "
                         f"{redact_summary.get('total_redactions', 0)} entity/entities masked -> {redacted_md_path.name}"
                     )
                 except Exception as redact_err:
                     logger.warning(f"Could not redact markdown for {pdf_file.name}: {redact_err}")
-
 
         elapsed = time.time() - start_time
         end_dt = datetime.utcnow()
@@ -299,8 +340,8 @@ class MinerUConverter:
         create_standard_aliases(manifest, create_v_aliases=True)
 
         logger.info(
-            f"Successfully converted [bold green]{pdf_file.name}[/bold green] in {elapsed:.2f}s "
-            f"({len(manifest.all_files())} files generated)"
+            f"🎉 [MinerU Pipeline] Successfully finished conversion for {pdf_file.name} in {elapsed:.2f}s "
+            f"({len(manifest.all_files())} files generated) -> {actual_doc_dir}"
         )
 
         if step_callback:

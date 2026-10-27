@@ -24,7 +24,7 @@ def add_file_handler_to_loggers(
 ) -> RotatingFileHandler:
     """
     Attach a thread-safe rotating file handler to the specified loggers
-    (defaults to mineru_converter, uvicorn, uvicorn.access, and uvicorn.error).
+    (defaults to mineru_converter, uvicorn, and uvicorn.error; excludes uvicorn.access to prevent access log clutter).
     """
     log_path = Path(log_file).resolve()
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -42,9 +42,11 @@ def add_file_handler_to_loggers(
     file_handler.setFormatter(formatter)
     file_handler.setLevel(level)
 
-    names = logger_names or [LOGGER_NAME, "uvicorn", "uvicorn.error"]
+    # Attach to standard loggers (mineru_converter, mineru, magic_pdf, uvicorn, uvicorn.error)
+    names = logger_names or [LOGGER_NAME, "mineru", "magic_pdf", "uvicorn", "uvicorn.error"]
     for name in names:
         l = logging.getLogger(name)
+        l.setLevel(level)
         # Avoid duplicate handlers for this exact file
         already_has = any(
             isinstance(h, RotatingFileHandler) and Path(getattr(h, "baseFilename", "")).resolve() == log_path
@@ -53,11 +55,33 @@ def add_file_handler_to_loggers(
         if not already_has:
             l.addHandler(file_handler)
 
-    # Explicitly silence uvicorn.access so HTTP request access logs do not pollute server.log
+    # Connect loguru (used by MinerU internally for model init, layout detection, OCR, page progress) to server.log
+    try:
+        from loguru import logger as loguru_logger
+
+        if not hasattr(add_file_handler_to_loggers, "_attached_loguru_paths"):
+            add_file_handler_to_loggers._attached_loguru_paths = set()
+
+        sink_key = str(log_path)
+        if sink_key not in add_file_handler_to_loggers._attached_loguru_paths:
+            loguru_logger.add(
+                file_handler,
+                format="{message}",
+                level="DEBUG",
+                colorize=False,
+            )
+            add_file_handler_to_loggers._attached_loguru_paths.add(sink_key)
+    except ImportError:
+        pass
+
+    # Explicitly ensure uvicorn.access does NOT have this file handler attached and is suppressed
     access_logger = logging.getLogger("uvicorn.access")
-    access_logger.handlers.clear()
+    access_logger.handlers = [
+        h for h in access_logger.handlers
+        if not (isinstance(h, RotatingFileHandler) and Path(getattr(h, "baseFilename", "")).resolve() == log_path)
+    ]
     access_logger.propagate = False
-    access_logger.setLevel(logging.WARNING)
+    access_logger.disabled = True
 
     return file_handler
 

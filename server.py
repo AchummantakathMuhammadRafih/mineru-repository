@@ -60,6 +60,12 @@ import time
 from mineru_converter.core.patches import apply_transformers_compat_patches
 apply_transformers_compat_patches()
 
+# Expose app object directly from server.py for `uvicorn server:app` compatibility
+try:
+    from mineru_converter.server.app import app
+except ImportError:
+    app = None
+
 
 def is_process_running(pid: int) -> bool:
     """Check if a process with given PID is currently active."""
@@ -161,9 +167,6 @@ def run_detached(args, log_file: Path) -> None:
         print("Use 'python server.py --stop' to terminate it first.")
         sys.exit(1)
 
-    log_file.parent.mkdir(parents=True, exist_ok=True)
-    log_fp = open(log_file, "a", encoding="utf-8")
-
     cmd = [
         sys.executable,
         str(Path(__file__).resolve()),
@@ -173,6 +176,9 @@ def run_detached(args, log_file: Path) -> None:
     ]
     if args.reload:
         cmd.append("--reload")
+
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    log_fp = open(log_file, "a", encoding="utf-8", buffering=1)
 
     if sys.platform == "win32":
         CREATE_NO_WINDOW = 0x08000000
@@ -232,6 +238,11 @@ def run_foreground(args, log_file: Path) -> None:
     print(f"  * API Docs: http://localhost:{args.port}/docs")
     print(f"  * Logging:  {log_file.resolve()}")
     print("  * Worker:   Async Sequential FIFO Queue (MinerU -> Hierarchy Correction -> Presidio Redaction)")
+
+    # Suppress uvicorn access logger
+    import logging
+    logging.getLogger("uvicorn.access").disabled = True
+    logging.getLogger("uvicorn.access").propagate = False
 
     try:
         uvicorn.run(

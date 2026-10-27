@@ -59,9 +59,8 @@ async def lifespan(app: FastAPI):
     """Lifespan context manager to start and stop background queue worker."""
     # Ensure logs write to server.log in the project root (excluding access logs)
     add_file_handler_to_loggers(DEFAULT_LOG_FILE)
-    logging.getLogger("uvicorn.access").handlers.clear()
+    logging.getLogger("uvicorn.access").disabled = True
     logging.getLogger("uvicorn.access").propagate = False
-    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
     from mineru_converter.core.patches import apply_transformers_compat_patches
     apply_transformers_compat_patches()

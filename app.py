@@ -92,6 +92,14 @@ with st.sidebar:
     auto_refresh = st.checkbox("Auto-refresh queue", value=True)
 
     st.divider()
+    st.subheader("📑 Heading Hierarchy")
+    use_llm_toggle = st.checkbox(
+        "Use Azure OpenAI for Headings",
+        value=os.environ.get("USE_LLM_HIERARCHY", "false").strip().lower() in ("true", "1", "yes"),
+        help="Use Azure OpenAI to semantically fix heading hierarchy (H1-H6) instead of font size heuristics."
+    )
+
+    st.divider()
     st.subheader("🤖 Background Worker")
 
     # In-memory background runner trigger for single-process testing
@@ -99,8 +107,14 @@ with st.sidebar:
     
     if run_embedded:
         # Check if there is a pending job and process 1 file
-        if "watcher" not in st.session_state:
-            worker_cfg = ConversionConfig(output_dir=OUTPUT_DIR, dump_images=False, redact_pii=True)
+        if "watcher" not in st.session_state or st.session_state.get("last_use_llm") != use_llm_toggle:
+            st.session_state["last_use_llm"] = use_llm_toggle
+            worker_cfg = ConversionConfig(
+                output_dir=OUTPUT_DIR,
+                dump_images=False,
+                redact_pii=True,
+                use_llm_hierarchy=use_llm_toggle,
+            )
             st.session_state["watcher"] = BackgroundWatcher(
                 input_dir=INPUT_DIR,
                 output_dir=OUTPUT_DIR,

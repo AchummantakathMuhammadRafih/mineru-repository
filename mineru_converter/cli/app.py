@@ -82,6 +82,10 @@ def cli():
 @click.option("--no-manifest", is_flag=True, default=False, help="Skip writing manifest/summary JSON files.")
 @click.option("--no-redact", is_flag=True, default=False, help="Skip PII redaction with Microsoft Presidio.")
 @click.option("--capture-header/--no-capture-header", default=True, show_default=True, help="Elevate first heading to top level (#) if needed.")
+@click.option("--use-llm-hierarchy", is_flag=True, default=False, help="Use Azure OpenAI to semantically correct heading hierarchy instead of font heuristics.")
+@click.option("--azure-endpoint", type=str, default=None, help="Azure OpenAI endpoint URL.")
+@click.option("--azure-deployment", type=str, default=None, help="Azure OpenAI deployment name.")
+@click.option("--azure-api-key", type=str, default=None, help="Azure OpenAI API key.")
 @click.option("-u", "--server-url", type=str, default=None, help="URL for remote VLM/hybrid server.")
 @click.option("-v", "--verbose", is_flag=True, default=False, help="Enable verbose debug logging.")
 @click.option("-q", "--quiet", is_flag=True, default=False, help="Suppress informational messages.")
@@ -102,6 +106,10 @@ def convert_cmd(
     no_manifest: bool,
     no_redact: bool,
     capture_header: bool,
+    use_llm_hierarchy: bool,
+    azure_endpoint: Optional[str],
+    azure_deployment: Optional[str],
+    azure_api_key: Optional[str],
     server_url: Optional[str],
     verbose: bool,
     quiet: bool,
@@ -128,6 +136,10 @@ def convert_cmd(
         generate_manifest=not no_manifest,
         redact_pii=not no_redact,
         capture_header=capture_header,
+        use_llm_hierarchy=use_llm_hierarchy,
+        azure_openai_endpoint=azure_endpoint,
+        azure_openai_deployment=azure_deployment,
+        azure_openai_api_key=azure_api_key,
         server_url=server_url,
     )
 

@@ -1,9 +1,15 @@
 """Settings and configuration schema for the MinerU PDF conversion pipeline."""
 
+import os
 from pathlib import Path
 from typing import Optional, List
 from pydantic import BaseModel, Field, field_validator
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv(override=False)
+except ImportError:
+    pass
 
 from mineru_converter.models.enums import BackendType, ParseMethod, HybridEffort
 
@@ -67,6 +73,37 @@ class ConversionConfig(BaseModel):
         default=True,
         description="Run dominant font-size hierarchy correction on V2 list to generate duplicate corrected V2 JSON and clean, filtered Markdown."
     )
+
+    # Parallel Hierarchy Correction: Heuristic vs Azure OpenAI LLM
+    use_llm_hierarchy: bool = Field(
+        default_factory=lambda: os.environ.get("USE_LLM_HIERARCHY", "false").strip().lower() in ("true", "1", "yes"),
+        description="If True, disables font-size heuristics and uses Azure OpenAI LLM to semantically correct heading hierarchy (H1..H6). If False, uses existing font-size heuristics."
+    )
+    azure_openai_endpoint: Optional[str] = Field(
+        default=None,
+        description="Azure OpenAI endpoint URL (e.g. https://my-resource.openai.azure.com/). Fallback: AZURE_OPENAI_ENDPOINT env var."
+    )
+    azure_openai_api_key: Optional[str] = Field(
+        default=None,
+        description="Azure OpenAI API key. Fallback: AZURE_OPENAI_API_KEY env var."
+    )
+    azure_openai_deployment: Optional[str] = Field(
+        default=None,
+        description="Azure OpenAI deployment name (e.g. gpt-4o, gpt-4o-mini). Fallback: AZURE_OPENAI_DEPLOYMENT or AZURE_OPENAI_MODEL env var."
+    )
+    azure_openai_api_version: str = Field(
+        default="2024-02-15-preview",
+        description="Azure OpenAI API version. Fallback: AZURE_OPENAI_API_VERSION env var."
+    )
+    llm_temperature: float = Field(
+        default=0.0,
+        description="Temperature for LLM hierarchy inference (0.0 for deterministic output)."
+    )
+    llm_timeout: float = Field(
+        default=60.0,
+        description="Timeout in seconds for LLM call."
+    )
+
     redact_pii: bool = Field(
         default=True,
         description="Redact PII from clean markdown using Microsoft Presidio (masked with stars)."
