@@ -22,20 +22,20 @@ class ConversionConfig(BaseModel):
         description="Target root directory where output artifacts will be saved."
     )
     backend: BackendType = Field(
-        default=BackendType.PIPELINE,
-        description="Backend engine for parsing: pipeline, hybrid-engine, vlm-engine, etc."
+        default_factory=lambda: BackendType(os.environ.get("MINERU_BACKEND", "pipeline").strip().lower()),
+        description="Backend engine for parsing: pipeline, hybrid-engine, vlm-engine, etc. Fallback: MINERU_BACKEND env var."
     )
     method: ParseMethod = Field(
-        default=ParseMethod.AUTO,
-        description="Parsing method: auto, txt (fast text-only), ocr (image/scanned PDF OCR)."
+        default_factory=lambda: ParseMethod(os.environ.get("MINERU_PARSE_METHOD", "auto").strip().lower()),
+        description="Parsing method: auto, txt (fast text-only), ocr (image/scanned PDF OCR). Fallback: MINERU_PARSE_METHOD env var."
     )
     lang: str = Field(
         default="ch",
         description="Primary document language code for OCR (e.g. 'ch', 'en', 'korean', 'arabic', 'devanagari')."
     )
     effort: HybridEffort = Field(
-        default=HybridEffort.MEDIUM,
-        description="Effort level for hybrid backend: medium (faster) or high (detailed image/chart analysis)."
+        default_factory=lambda: HybridEffort(os.environ.get("HYBRID_EFFORT", "high").strip().lower()),
+        description="Effort level for hybrid backend: medium (faster) or high (detailed image/chart analysis). Fallback: HYBRID_EFFORT env var (default: high)."
     )
     
     # Feature flags for extraction
