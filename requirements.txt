@@ -1,29 +1,35 @@
-# Core MinerU Engine & PyTorch
-# Note: For CUDA support, install torch torchvision torchaudio from https://download.pytorch.org/whl/cu121
-torch>=2.0.0
-torchvision>=0.15.0
-torchaudio>=2.0.0
-mineru>=3.0.0
+# Core MinerU Engine & PyTorch (CUDA / CPU compatible)
+# For GPU CUDA 12.1/12.4, install matching torch wheel prior to other packages
+torch>=2.2.0,<2.5.0
+torchvision>=0.17.0,<0.20.0
+torchaudio>=2.2.0,<2.5.0
 
-# CLI, Schema, and Logging
+# Pin NumPy < 2.0 to prevent C-extension ABI breaks with spaCy, thinc, presidio, and mineru
+numpy>=1.26.0,<2.0.0
+
+# Core MinerU Parser Engine
+mineru>=3.4.0,<5.0.0
+
+# CLI, Schema, and Logging (Ensure modern Pydantic v2 compatible with MinerU & FastAPI)
 click>=8.0.0
 rich>=13.0.0
-pydantic>=2.0.0
+pydantic>=2.7.0,<3.0.0
 pypdf>=3.0.0
 
 # Hierarchy Corrector & Font Analysis
 pymupdf>=1.23.0
 
 # Microsoft Presidio PII Redaction
-presidio-analyzer>=2.2.0
-presidio-anonymizer>=2.2.0
-spacy>=3.7.0
+presidio-analyzer>=2.2.350
+presidio-anonymizer>=2.2.350
+spacy>=3.7.0,<4.0.0
 
 # Web Application UI & Async Server
 streamlit>=1.30.0
-fastapi>=0.100.0
+fastapi>=0.110.0
 uvicorn>=0.20.0
-python-multipart>=0.0.6
+python-multipart>=0.0.9
 
 # Testing & Dev
 pytest>=8.0.0
+
