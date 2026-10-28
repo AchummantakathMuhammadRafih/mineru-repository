@@ -718,12 +718,21 @@ def merge_consecutive_headings(
                             scan_idx += 1
                             continue
 
+                        next_level = int(next_content.get("level", 1))
+                        prev_level = consecutive_titles[-1][4]
+
+                        # Natural parent -> child hierarchy (e.g. H2 followed by H3):
+                        # Should NOT be combined into one line; keep as separate headings.
+                        # Only merge if same level (e.g. H2 followed by H2) or inverted (e.g. H3 followed by H2).
+                        if prev_level < next_level:
+                            break
+
                         consecutive_titles.append((
                             next_page_idx,
                             next_block_idx,
                             next_block,
                             next_text,
-                            int(next_content.get("level", 1)),
+                            next_level,
                         ))
                         scan_idx += 1
                         continue

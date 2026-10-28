@@ -451,6 +451,30 @@ def test_merge_consecutive_headings_with_punctuation():
     assert updated_v2[0][0]["content"]["title_content"][0]["content"] == "Step 1: Setup Hardware"
 
 
+def test_merge_consecutive_headings_does_not_merge_parent_child():
+    """Test that a parent heading (H2) followed by a child heading (H3) is preserved and NOT merged."""
+    from mineru_converter.exporters.hierarchy_corrector import merge_consecutive_headings, convert_v2_to_markdown
+
+    mock_v2 = [
+        [
+            {"type": "title", "content": {"title_content": [{"type": "text", "content": "PERCEPTIONS"}], "level": 2}},
+            {"type": "title", "content": {"title_content": [{"type": "text", "content": "Text Legibility"}], "level": 3}},
+            {"type": "paragraph", "content": {"paragraph_content": [{"type": "text", "content": "Guidance details."}]}},
+        ]
+    ]
+
+    updated_v2, summary = merge_consecutive_headings(mock_v2)
+
+    assert summary["merged_headings_count"] == 0
+    assert updated_v2[0][0]["content"]["level"] == 2
+    assert updated_v2[0][0]["content"]["title_content"][0]["content"] == "PERCEPTIONS"
+    assert updated_v2[0][1]["content"]["level"] == 3
+    assert updated_v2[0][1]["content"]["title_content"][0]["content"] == "Text Legibility"
+
+    md = convert_v2_to_markdown(updated_v2)
+    assert "## PERCEPTIONS\n\n### Text Legibility" in md
+
+
 
 
 def test_correct_title_hierarchy_direct_openai_success(monkeypatch):
