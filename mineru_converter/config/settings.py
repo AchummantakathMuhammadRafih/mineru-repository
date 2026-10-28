@@ -114,8 +114,8 @@ class ConversionConfig(BaseModel):
         description="Temperature for LLM hierarchy inference (0.0 for deterministic output)."
     )
     llm_timeout: float = Field(
-        default=60.0,
-        description="Timeout in seconds for LLM call."
+        default_factory=lambda: float(os.environ.get("LLM_TIMEOUT", "300.0")),
+        description="Timeout in seconds for LLM call (default: 300.0s / 5 minutes). Fallback: LLM_TIMEOUT env var."
     )
 
     redact_pii: bool = Field(

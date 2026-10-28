@@ -315,7 +315,7 @@ def correct_title_hierarchy_llm(
     azure_deployment: Optional[str] = None,
     azure_api_version: str = "2024-02-15-preview",
     temperature: float = 0.0,
-    timeout: float = 60.0,
+    timeout: Optional[float] = None,
     fallback_pdf_path: Optional[Union[str, Path]] = None,
 ) -> Tuple[List[List[Dict[str, Any]]], Dict[str, Any]]:
     """
@@ -439,17 +439,25 @@ def correct_title_hierarchy_llm(
     provider_name = "azure_openai" if is_azure else "openai"
     model_name = az_deployment if is_azure else oai_model
 
+    # Resolve timeout: explicit argument -> LLM_TIMEOUT env var -> default 300.0s (5 minutes)
+    resolved_timeout = timeout
+    if resolved_timeout is None:
+        try:
+            resolved_timeout = float(os.environ.get("LLM_TIMEOUT", "300.0"))
+        except (ValueError, TypeError):
+            resolved_timeout = 300.0
+
     if is_azure:
         logger.info(
             f"🤖 [LLM Hierarchy] Initiating Azure OpenAI call | deployment='{az_deployment}' "
             f"| endpoint='{az_endpoint}' | api_version='{az_version}' "
-            f"| total_headings={len(title_entries)} | temperature={temperature} | timeout={timeout}s"
+            f"| total_headings={len(title_entries)} | temperature={temperature} | timeout={resolved_timeout}s"
         )
     else:
         logger.info(
             f"🤖 [LLM Hierarchy] Initiating OpenAI call | model='{oai_model}' "
             f"| base_url='{oai_base or 'default'}' "
-            f"| total_headings={len(title_entries)} | temperature={temperature} | timeout={timeout}s"
+            f"| total_headings={len(title_entries)} | temperature={temperature} | timeout={resolved_timeout}s"
         )
 
     system_prompt = (
@@ -478,14 +486,14 @@ def correct_title_hierarchy_llm(
                 azure_endpoint=az_endpoint,
                 api_key=az_key,
                 api_version=az_version,
-                timeout=timeout,
+                timeout=resolved_timeout,
             )
         else:
             from openai import OpenAI
             client = OpenAI(
                 api_key=oai_key,
                 base_url=oai_base,
-                timeout=timeout,
+                timeout=resolved_timeout,
             )
 
         logger.info(f"🚀 [LLM Hierarchy] Dispatching request with {len(headings_input)} headings to {provider_name} ('{model_name}')...")
@@ -887,7 +895,7 @@ def process_content_list_v2_to_clean_markdown(
     azure_deployment: Optional[str] = None,
     azure_api_version: str = "2024-02-15-preview",
     temperature: float = 0.0,
-    timeout: float = 60.0,
+    timeout: Optional[float] = None,
 ) -> Tuple[Path, Path, Dict[str, Any]]:
     """
     End-to-end pipeline:
