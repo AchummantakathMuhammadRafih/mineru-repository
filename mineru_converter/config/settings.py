@@ -74,11 +74,25 @@ class ConversionConfig(BaseModel):
         description="Run dominant font-size hierarchy correction on V2 list to generate duplicate corrected V2 JSON and clean, filtered Markdown."
     )
 
-    # Parallel Hierarchy Correction: Heuristic vs Azure OpenAI LLM
+    # Parallel Hierarchy Correction: Heuristic vs Azure OpenAI / OpenAI LLM
     use_llm_hierarchy: bool = Field(
         default_factory=lambda: os.environ.get("USE_LLM_HIERARCHY", "false").strip().lower() in ("true", "1", "yes"),
-        description="If True, disables font-size heuristics and uses Azure OpenAI LLM to semantically correct heading hierarchy (H1..H6). If False, uses existing font-size heuristics."
+        description="If True, disables font-size heuristics and uses LLM (Azure OpenAI or direct OpenAI) to semantically correct heading hierarchy (H1..H6). If False, uses existing font-size heuristics."
     )
+    # Direct OpenAI credentials
+    openai_api_key: Optional[str] = Field(
+        default=None,
+        description="OpenAI API key for direct OpenAI access. Fallback: OPENAI_API_KEY env var."
+    )
+    openai_model: Optional[str] = Field(
+        default=None,
+        description="OpenAI model name (e.g. gpt-4o, gpt-4o-mini). Fallback: OPENAI_MODEL env var or 'gpt-4o-mini'."
+    )
+    openai_base_url: Optional[str] = Field(
+        default=None,
+        description="Optional base URL for OpenAI-compatible APIs. Fallback: OPENAI_BASE_URL env var."
+    )
+    # Azure OpenAI credentials
     azure_openai_endpoint: Optional[str] = Field(
         default=None,
         description="Azure OpenAI endpoint URL (e.g. https://my-resource.openai.azure.com/). Fallback: AZURE_OPENAI_ENDPOINT env var."

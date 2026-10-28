@@ -82,7 +82,10 @@ def cli():
 @click.option("--no-manifest", is_flag=True, default=False, help="Skip writing manifest/summary JSON files.")
 @click.option("--no-redact", is_flag=True, default=False, help="Skip PII redaction with Microsoft Presidio.")
 @click.option("--capture-header/--no-capture-header", default=True, show_default=True, help="Elevate first heading to top level (#) if needed.")
-@click.option("--use-llm-hierarchy", is_flag=True, default=False, help="Use Azure OpenAI to semantically correct heading hierarchy instead of font heuristics.")
+@click.option("--use-llm-hierarchy", is_flag=True, default=False, help="Use LLM (OpenAI / Azure OpenAI) to semantically correct heading hierarchy instead of font heuristics.")
+@click.option("--openai-api-key", type=str, default=None, help="OpenAI API key.")
+@click.option("--openai-model", type=str, default=None, help="OpenAI model name (e.g. gpt-4o, gpt-4o-mini).")
+@click.option("--openai-base-url", type=str, default=None, help="OpenAI base URL.")
 @click.option("--azure-endpoint", type=str, default=None, help="Azure OpenAI endpoint URL.")
 @click.option("--azure-deployment", type=str, default=None, help="Azure OpenAI deployment name.")
 @click.option("--azure-api-key", type=str, default=None, help="Azure OpenAI API key.")
@@ -107,6 +110,9 @@ def convert_cmd(
     no_redact: bool,
     capture_header: bool,
     use_llm_hierarchy: bool,
+    openai_api_key: Optional[str],
+    openai_model: Optional[str],
+    openai_base_url: Optional[str],
     azure_endpoint: Optional[str],
     azure_deployment: Optional[str],
     azure_api_key: Optional[str],
@@ -137,6 +143,9 @@ def convert_cmd(
         redact_pii=not no_redact,
         capture_header=capture_header,
         use_llm_hierarchy=use_llm_hierarchy,
+        openai_api_key=openai_api_key,
+        openai_model=openai_model,
+        openai_base_url=openai_base_url,
         azure_openai_endpoint=azure_endpoint,
         azure_openai_deployment=azure_deployment,
         azure_openai_api_key=azure_api_key,

@@ -202,6 +202,9 @@ def correct_title_hierarchy(
 
 def correct_title_hierarchy_llm(
     content_list_v2: List[List[Dict[str, Any]]],
+    openai_api_key: Optional[str] = None,
+    openai_model: Optional[str] = None,
+    openai_base_url: Optional[str] = None,
     azure_endpoint: Optional[str] = None,
     azure_api_key: Optional[str] = None,
     azure_deployment: Optional[str] = None,
@@ -211,13 +214,13 @@ def correct_title_hierarchy_llm(
     fallback_pdf_path: Optional[Union[str, Path]] = None,
 ) -> Tuple[List[List[Dict[str, Any]]], Dict[str, Any]]:
     """
-    Parallel LLM Flow using Azure OpenAI:
+    Parallel LLM Flow using OpenAI or Azure OpenAI:
     1. Clone content_list_v2 so original is never modified.
     2. Extract only the 'type': 'title' elements from content_list_v2, assigning each a unique sequential id.
-    3. Send the complete list of headings to Azure OpenAI with a structured JSON schema.
+    3. Send the complete list of headings to OpenAI / Azure OpenAI with a structured JSON schema.
     4. Parse returned JSON mapping id -> corrected level (1..6).
     5. Update 'level' in the duplicated structure.
-    6. If Azure OpenAI credentials are missing or the API call fails, gracefully falls back
+    6. If LLM credentials are missing or the API call fails, gracefully falls back
        to font-size heuristics (if PDF is available) or original levels.
 
     Returns:
@@ -247,26 +250,51 @@ def correct_title_hierarchy_llm(
     if not title_entries:
         logger.info("🤖 [LLM Hierarchy] Document contains 0 title headings; skipping LLM call.")
         return corrected_v2, {
-            "method": "azure_openai_semantic",
+            "method": "llm_semantic",
             "total_titles": 0,
             "corrected_count": 0,
             "title_details": [],
         }
 
-    # Resolve Azure OpenAI credentials from arguments or environment variables
-    endpoint = (azure_endpoint or os.environ.get("AZURE_OPENAI_ENDPOINT") or "").strip().rstrip("/")
-    api_key = (azure_api_key or os.environ.get("AZURE_OPENAI_API_KEY") or "").strip()
-    deployment = (
+    # Resolve provider:
+    # If openai_api_key is explicitly passed, use direct OpenAI.
+    # If azure_endpoint / azure_api_key is explicitly passed, use Azure OpenAI.
+    # Otherwise check environment variables.
+    explicit_direct = bool(openai_api_key)
+    explicit_azure = bool(azure_endpoint or azure_api_key or azure_deployment)
+
+    az_endpoint = (azure_endpoint or os.environ.get("AZURE_OPENAI_ENDPOINT") or "").strip().rstrip("/")
+    az_key = (azure_api_key or os.environ.get("AZURE_OPENAI_API_KEY") or "").strip()
+    az_deployment = (
         azure_deployment
         or os.environ.get("AZURE_OPENAI_DEPLOYMENT")
         or os.environ.get("AZURE_OPENAI_MODEL")
         or "gpt-4o-mini"
     ).strip()
-    api_version = (azure_api_version or os.environ.get("AZURE_OPENAI_API_VERSION") or "2024-02-15-preview").strip()
+    az_version = (azure_api_version or os.environ.get("AZURE_OPENAI_API_VERSION") or "2024-02-15-preview").strip()
 
-    if not endpoint or not api_key:
+    oai_key = (openai_api_key or os.environ.get("OPENAI_API_KEY") or "").strip()
+    oai_model = (openai_model or os.environ.get("OPENAI_MODEL") or "gpt-4o-mini").strip()
+    oai_base = (openai_base_url or os.environ.get("OPENAI_BASE_URL") or "").strip() or None
+
+    if explicit_direct:
+        is_direct_openai = True
+        is_azure = False
+    elif explicit_azure:
+        is_azure = bool(az_endpoint and az_key)
+        is_direct_openai = False
+    else:
+        # Check env vars
+        if oai_key and not (az_endpoint and az_key):
+            is_direct_openai = True
+            is_azure = False
+        else:
+            is_azure = bool(az_endpoint and az_key)
+            is_direct_openai = bool(oai_key and not is_azure)
+
+    if not is_azure and not is_direct_openai:
         logger.warning(
-            "⚠️ [LLM Hierarchy] Azure OpenAI credentials missing (endpoint or api_key not set). "
+            "⚠️ [LLM Hierarchy] No OpenAI or Azure OpenAI credentials found (neither OPENAI_API_KEY nor AZURE_OPENAI_API_KEY/ENDPOINT are set). "
             f"Attempting fallback to font-size heuristics (fallback_pdf={'available' if fallback_pdf_path and Path(fallback_pdf_path).exists() else 'none'})..."
         )
         if fallback_pdf_path and Path(fallback_pdf_path).exists():
@@ -277,9 +305,8 @@ def correct_title_hierarchy_llm(
             )
             return corr_v2, summary
         logger.warning("⚠️ [LLM Hierarchy] Fallback PDF not available; returning unmodified heading levels.")
-        # Fallback to unchanged levels
         return corrected_v2, {
-            "method": "azure_openai_semantic (fallback: no credentials)",
+            "method": "llm_semantic (fallback: no credentials)",
             "total_titles": len(title_entries),
             "corrected_count": 0,
             "title_details": [
@@ -304,11 +331,21 @@ def correct_title_hierarchy_llm(
         for e in title_entries
     ]
 
-    logger.info(
-        f"🤖 [LLM Hierarchy] Initiating Azure OpenAI call | deployment='{deployment}' "
-        f"| endpoint='{endpoint}' | api_version='{api_version}' "
-        f"| total_headings={len(title_entries)} | temperature={temperature} | timeout={timeout}s"
-    )
+    provider_name = "azure_openai" if is_azure else "openai"
+    model_name = az_deployment if is_azure else oai_model
+
+    if is_azure:
+        logger.info(
+            f"🤖 [LLM Hierarchy] Initiating Azure OpenAI call | deployment='{az_deployment}' "
+            f"| endpoint='{az_endpoint}' | api_version='{az_version}' "
+            f"| total_headings={len(title_entries)} | temperature={temperature} | timeout={timeout}s"
+        )
+    else:
+        logger.info(
+            f"🤖 [LLM Hierarchy] Initiating OpenAI call | model='{oai_model}' "
+            f"| base_url='{oai_base or 'default'}' "
+            f"| total_headings={len(title_entries)} | temperature={temperature} | timeout={timeout}s"
+        )
 
     system_prompt = (
         "You are an expert document outline structure and markdown hierarchy corrector.\n"
@@ -330,18 +367,25 @@ def correct_title_hierarchy_llm(
 
     t0 = time.time()
     try:
-        from openai import AzureOpenAI
+        if is_azure:
+            from openai import AzureOpenAI
+            client = AzureOpenAI(
+                azure_endpoint=az_endpoint,
+                api_key=az_key,
+                api_version=az_version,
+                timeout=timeout,
+            )
+        else:
+            from openai import OpenAI
+            client = OpenAI(
+                api_key=oai_key,
+                base_url=oai_base,
+                timeout=timeout,
+            )
 
-        client = AzureOpenAI(
-            azure_endpoint=endpoint,
-            api_key=api_key,
-            api_version=api_version,
-            timeout=timeout,
-        )
-
-        logger.info(f"🚀 [LLM Hierarchy] Dispatching request with {len(headings_input)} headings to '{deployment}'...")
+        logger.info(f"🚀 [LLM Hierarchy] Dispatching request with {len(headings_input)} headings to {provider_name} ('{model_name}')...")
         response = client.chat.completions.create(
-            model=deployment,
+            model=model_name,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": json.dumps(headings_input, ensure_ascii=False)},
@@ -368,7 +412,7 @@ def correct_title_hierarchy_llm(
                 usage_info = f" | tokens: {', '.join(u_parts)}"
 
         logger.info(
-            f"📥 [LLM Hierarchy] Received response from '{deployment}' in {duration:.2f}s{usage_info}"
+            f"📥 [LLM Hierarchy] Received response from '{model_name}' in {duration:.2f}s{usage_info}"
         )
 
         raw_content = response.choices[0].message.content or "{}"
@@ -429,8 +473,9 @@ def correct_title_hierarchy_llm(
             logger.info("   ↳ All headings retained their original levels as verified optimal.")
 
         summary_stats = {
-            "method": "azure_openai_semantic",
-            "model": deployment,
+            "method": f"{provider_name}_semantic",
+            "provider": provider_name,
+            "model": model_name,
             "total_titles": len(title_entries),
             "corrected_count": corrected_count,
             "duration_seconds": round(duration, 3),
@@ -450,7 +495,7 @@ def correct_title_hierarchy_llm(
     except Exception as llm_err:
         duration = time.time() - t0
         logger.error(
-            f"❌ [LLM Hierarchy] Azure OpenAI call failed after {duration:.2f}s: {llm_err}. "
+            f"❌ [LLM Hierarchy] {provider_name.capitalize()} call failed after {duration:.2f}s: {llm_err}. "
             "Attempting fallback to font-size heuristics if PDF is available...",
             exc_info=True,
         )
@@ -464,7 +509,8 @@ def correct_title_hierarchy_llm(
 
         logger.warning("⚠️ [LLM Hierarchy] Fallback PDF not available; returning unmodified heading levels.")
         return corrected_v2, {
-            "method": f"azure_openai_semantic (fallback: error {llm_err})",
+            "method": f"{provider_name}_semantic (fallback: error {llm_err})",
+            "provider": provider_name,
             "total_titles": len(title_entries),
             "corrected_count": 0,
             "title_details": [
@@ -478,6 +524,172 @@ def correct_title_hierarchy_llm(
                 for e in title_entries
             ],
         }
+
+
+def demote_consecutive_headings(
+    content_list_v2: List[List[Dict[str, Any]]],
+) -> Tuple[List[List[Dict[str, Any]]], Dict[str, Any]]:
+    """
+    Scans content_list_v2 in document order to detect consecutive headings without
+    intervening body text or content.
+
+    If heading H_i is immediately followed by H_{i+1} at the same or higher level
+    (H_{i+1}.level <= H_i.level) with no body paragraph, table, formula, or image
+    between them, H_{i+1} is demoted to a deeper child level (level = min(6, H_i.level + 1)).
+    When H_{i+1} is demoted by delta (demoted_level - original_level), all subsequent
+    descendant headings within its subtree (headings deeper than H_{i+1}'s original level)
+    are also shifted down by delta, until a heading of equal or higher level to
+    H_{i+1}'s original level is reached.
+
+    Returns:
+        (updated_content_list_v2, summary_stats)
+    """
+    # 1. Flatten all blocks in document reading order
+    flattened_blocks: List[Tuple[int, int, Dict[str, Any]]] = []
+    for page_idx, page in enumerate(content_list_v2):
+        for block_idx, block in enumerate(page):
+            flattened_blocks.append((page_idx, block_idx, block))
+
+    demotions: List[Dict[str, Any]] = []
+
+    curr_idx = 0
+    total_blocks = len(flattened_blocks)
+
+    while curr_idx < total_blocks:
+        page_idx, block_idx, block = flattened_blocks[curr_idx]
+        block_type = block.get("type", "")
+
+        # Look for a heading with valid text
+        if block_type == "title":
+            content_obj = block.get("content", {})
+            title_spans = content_obj.get("title_content", [])
+            heading_text = "".join(
+                s.get("content", "") for s in title_spans if isinstance(s, dict)
+            ).strip()
+
+            if heading_text:
+                prev_heading_block = block
+                prev_heading_text = heading_text
+                scan_idx = curr_idx + 1
+
+                while scan_idx < total_blocks:
+                    next_page_idx, next_block_idx, next_block = flattened_blocks[scan_idx]
+                    next_type = next_block.get("type", "")
+                    next_content = next_block.get("content", {})
+
+                    # Skip non-content noise
+                    if next_type in ("page_header", "page_footer", "page_number"):
+                        scan_idx += 1
+                        continue
+
+                    # Substantive body content: paragraph, table, formula, or image
+                    if next_type in ("paragraph", "table", "formula", "image"):
+                        if next_type == "paragraph":
+                            p_spans = next_content.get("paragraph_content", [])
+                            p_text = "".join(
+                                s.get("content", "") for s in p_spans if isinstance(s, dict)
+                            ).strip()
+                            if not p_text:
+                                scan_idx += 1
+                                continue
+                        # Substantive content encountered; ends the immediate consecutive heading run
+                        break
+
+                    # Found another heading
+                    if next_type == "title":
+                        next_title_spans = next_content.get("title_content", [])
+                        next_text = "".join(
+                            s.get("content", "") for s in next_title_spans if isinstance(s, dict)
+                        ).strip()
+
+                        if not next_text:
+                            scan_idx += 1
+                            continue
+
+                        prev_level = int(prev_heading_block.get("content", {}).get("level", 1))
+                        curr_level = int(next_content.get("level", 1))
+
+                        # If next heading is at the same level or higher (numerically <= prev_level),
+                        # demote it to be one level deeper
+                        if curr_level <= prev_level:
+                            demoted_level = min(6, prev_level + 1)
+                            delta = demoted_level - curr_level
+                            orig_target_level = curr_level
+
+                            next_content["level"] = demoted_level
+
+                            demotions.append({
+                                "page": next_page_idx + 1,
+                                "parent_heading": prev_heading_text,
+                                "parent_level": prev_level,
+                                "demoted_heading": next_text,
+                                "old_level": curr_level,
+                                "new_level": demoted_level,
+                            })
+
+                            logger.info(
+                                f"🔄 [Consecutive Scan] Demoted '{next_text[:35]}' "
+                                f"(H{curr_level} -> H{demoted_level}) following '{prev_heading_text[:35]}' (H{prev_level})"
+                            )
+
+                            # Shift all subsequent child headings under next_block by delta
+                            # until we reach a heading with level <= orig_target_level
+                            if delta > 0:
+                                child_scan_idx = scan_idx + 1
+                                while child_scan_idx < total_blocks:
+                                    _, _, ch_block = flattened_blocks[child_scan_idx]
+                                    if ch_block.get("type") == "title":
+                                        ch_content = ch_block.get("content", {})
+                                        ch_title_spans = ch_content.get("title_content", [])
+                                        ch_text = "".join(
+                                            s.get("content", "") for s in ch_title_spans if isinstance(s, dict)
+                                        ).strip()
+
+                                        if ch_text:
+                                            ch_level = int(ch_content.get("level", 1))
+                                            # Stop when reaching a heading at the same or higher level than next_text's original level
+                                            if ch_level <= orig_target_level:
+                                                break
+                                            # It is a child/descendant heading; shift it down
+                                            new_ch_level = min(6, ch_level + delta)
+                                            ch_content["level"] = new_ch_level
+                                            demotions.append({
+                                                "page": flattened_blocks[child_scan_idx][0] + 1,
+                                                "parent_heading": next_text,
+                                                "parent_level": demoted_level,
+                                                "demoted_heading": ch_text,
+                                                "old_level": ch_level,
+                                                "new_level": new_ch_level,
+                                                "reason": "subtree_cascade",
+                                            })
+                                            logger.info(
+                                                f"   ↳ [Subtree Shift] Demoted child '{ch_text[:35]}' "
+                                                f"(H{ch_level} -> H{new_ch_level}) by +{delta}"
+                                            )
+                                    child_scan_idx += 1
+
+                        # Advance prev_heading for cascading (e.g. 3 or more consecutive headings)
+                        prev_heading_block = next_block
+                        prev_heading_text = next_text
+                        scan_idx += 1
+                        continue
+
+                    # Any other unrecognized block type ends the run
+                    break
+
+        curr_idx += 1
+
+    summary_stats = {
+        "consecutive_demotions": len(demotions),
+        "demotion_details": demotions,
+    }
+
+    if demotions:
+        logger.info(
+            f"✓ [Consecutive Scan] Adjusted {len(demotions)} heading(s) via downward demotion & subtree cascading."
+        )
+
+    return content_list_v2, summary_stats
 
 
 def convert_v2_to_markdown(
@@ -568,6 +780,9 @@ def process_content_list_v2_to_clean_markdown(
     filter_images: bool = True,
     include_footnotes: bool = False,
     use_llm: bool = False,
+    openai_api_key: Optional[str] = None,
+    openai_model: Optional[str] = None,
+    openai_base_url: Optional[str] = None,
     azure_endpoint: Optional[str] = None,
     azure_api_key: Optional[str] = None,
     azure_deployment: Optional[str] = None,
@@ -579,7 +794,7 @@ def process_content_list_v2_to_clean_markdown(
     End-to-end pipeline:
     1. Reads original content_list_v2.json.
     2. Corrects hierarchy into a duplicate JSON file:
-       - If use_llm=True: uses Azure OpenAI semantic outline analysis (heuristics disabled).
+       - If use_llm=True: uses OpenAI / Azure OpenAI semantic outline analysis (heuristics disabled).
        - If use_llm=False: uses dominant font-size heuristics via PyMuPDF.
     3. Produces filtered, clean Markdown.
     """
@@ -598,6 +813,9 @@ def process_content_list_v2_to_clean_markdown(
     if use_llm:
         corrected_v2, summary = correct_title_hierarchy_llm(
             content_list_v2=v2_data,
+            openai_api_key=openai_api_key,
+            openai_model=openai_model,
+            openai_base_url=openai_base_url,
             azure_endpoint=azure_endpoint,
             azure_api_key=azure_api_key,
             azure_deployment=azure_deployment,
@@ -608,6 +826,11 @@ def process_content_list_v2_to_clean_markdown(
         )
     else:
         corrected_v2, summary = correct_title_hierarchy(v2_data, pdf_p)
+
+    # Post-scan: Demote consecutive headings without intervening body paragraphs or content
+    corrected_v2, consec_summary = demote_consecutive_headings(corrected_v2)
+    summary["consecutive_demotions"] = consec_summary.get("consecutive_demotions", 0)
+    summary["consecutive_demotion_details"] = consec_summary.get("demotion_details", [])
 
     # Save duplicated corrected v2
     if output_v2_path is None:
