@@ -63,10 +63,12 @@ mkdir -p input output
 echo "=============================================================================="
 echo "🤖 [5/6] Pre-downloading MinerU Pipeline Model Weights"
 echo "=============================================================================="
-# Pre-download weights to avoid runtime timeouts on first conversion
-if ! mineru-models-download -s huggingface -m pipeline; then
-    echo "ℹ HuggingFace download failed or was rate-limited; trying ModelScope mirror..."
-    mineru-models-download -s modelscope -m pipeline || true
+# Try positional syntax first, then fallback to flag syntax if needed
+if ! mineru-models-download -s huggingface pipeline 2>/dev/null; then
+    if ! mineru-models-download --source huggingface --model_type pipeline 2>/dev/null; then
+        echo "ℹ HuggingFace download failed or was rate-limited; trying ModelScope mirror..."
+        mineru-models-download -s modelscope pipeline || mineru-models-download --source modelscope --model_type pipeline || true
+    fi
 fi
 
 echo "=============================================================================="
