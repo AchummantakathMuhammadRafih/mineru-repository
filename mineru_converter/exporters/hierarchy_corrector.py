@@ -200,6 +200,111 @@ def correct_title_hierarchy(
     return corrected_v2, summary_stats
 
 
+def normalize_heading_levels(
+    content_list_v2: List[List[Dict[str, Any]]],
+) -> Tuple[List[List[Dict[str, Any]]], Dict[str, Any]]:
+    """
+    Sequential order pass for heuristic hierarchy correction:
+    Scans headings in document reading order and eliminates level skips.
+    
+    If heading levels jump (e.g. H1 followed by H3, H6), they are compressed
+    in order without gaps:
+        # he        (H1)
+        ### g       (H3 -> H2)
+        ###### h    (H6 -> H3)
+    
+    Siblings and parent ascents are preserved correctly:
+    - If current_level <= prev_level: it climbs to an ancestor/sibling level,
+      mapped to the active stack's corresponding level.
+    - If current_level > prev_level: it can descend at most 1 level deeper
+      (new_level = prev_assigned_level + 1).
+      
+    Returns:
+        (updated_content_list_v2, summary_stats)
+    """
+    heading_refs: List[Dict[str, Any]] = []
+
+    for page_idx, page in enumerate(content_list_v2):
+        for block_idx, block in enumerate(page):
+            if block.get("type") == "title":
+                content_obj = block.get("content", {})
+                title_spans = content_obj.get("title_content", [])
+                text_content = "".join(
+                    s.get("content", "") for s in title_spans if isinstance(s, dict)
+                ).strip()
+                heading_refs.append({
+                    "page_idx": page_idx,
+                    "block_idx": block_idx,
+                    "text": text_content,
+                    "raw_level": max(1, min(6, int(content_obj.get("level", 1)))),
+                    "content_obj": content_obj,
+                })
+
+    if not heading_refs:
+        return content_list_v2, {"normalized_count": 0, "adjustments": []}
+
+    adjustments: List[Dict[str, Any]] = []
+
+    # Track ancestor hierarchy chain: list of (orig_raw_level, assigned_level)
+    chain: List[Tuple[int, int]] = []
+
+    for entry in heading_refs:
+        raw_lvl = entry["raw_level"]
+
+        if not chain:
+            # First heading in document: must start at H1 (or top of hierarchy)
+            assigned_lvl = 1
+            chain.append((raw_lvl, assigned_lvl))
+        else:
+            prev_raw, prev_assigned = chain[-1]
+
+            if raw_lvl > prev_raw:
+                # Descending to a child heading: cannot skip levels, exactly 1 level deeper
+                assigned_lvl = min(6, prev_assigned + 1)
+                chain.append((raw_lvl, assigned_lvl))
+            elif raw_lvl == prev_raw:
+                # Sibling at the same original level
+                assigned_lvl = prev_assigned
+            else:
+                # Ascending to a parent/ancestor level (raw_lvl < prev_raw)
+                # Pop chain until finding an ancestor with <= raw_lvl
+                while chain and chain[-1][0] > raw_lvl:
+                    chain.pop()
+
+                if chain and chain[-1][0] == raw_lvl:
+                    # Found an exact matching ancestor level
+                    assigned_lvl = chain[-1][1]
+                elif chain:
+                    # Between two levels on the stack: nest 1 level below that ancestor
+                    assigned_lvl = min(6, chain[-1][1] + 1)
+                    chain.append((raw_lvl, assigned_lvl))
+                else:
+                    # Popped completely: top level
+                    assigned_lvl = 1
+                    chain.append((raw_lvl, assigned_lvl))
+
+        if assigned_lvl != raw_lvl:
+            adjustments.append({
+                "page": entry["page_idx"] + 1,
+                "text": entry["text"][:40],
+                "old_level": raw_lvl,
+                "new_level": assigned_lvl,
+            })
+            entry["content_obj"]["level"] = assigned_lvl
+
+    if adjustments:
+        logger.info(
+            f"✓ [Level Normalizer] Corrected {len(adjustments)} heading level skip(s) in reading order."
+        )
+
+    summary_stats = {
+        "normalized_count": len(adjustments),
+        "adjustments": adjustments,
+    }
+
+    return content_list_v2, summary_stats
+
+
 def correct_title_hierarchy_llm(
     content_list_v2: List[List[Dict[str, Any]]],
     openai_api_key: Optional[str] = None,
@@ -526,32 +631,31 @@ def correct_title_hierarchy_llm(
         }
 
 
-def demote_consecutive_headings(
+def merge_consecutive_headings(
     content_list_v2: List[List[Dict[str, Any]]],
+    separator: str = ": ",
 ) -> Tuple[List[List[Dict[str, Any]]], Dict[str, Any]]:
     """
-    Scans content_list_v2 in document order to detect consecutive headings without
-    intervening body text or content.
+    Scans content_list_v2 in document reading order to detect consecutive headings
+    without intervening body text or content.
 
-    If heading H_i is immediately followed by H_{i+1} at the same or higher level
-    (H_{i+1}.level <= H_i.level) with no body paragraph, table, formula, or image
-    between them, H_{i+1} is demoted to a deeper child level (level = min(6, H_i.level + 1)).
-    When H_{i+1} is demoted by delta (demoted_level - original_level), all subsequent
-    descendant headings within its subtree (headings deeper than H_{i+1}'s original level)
-    are also shifted down by delta, until a heading of equal or higher level to
-    H_{i+1}'s original level is reached.
+    When consecutive headings are found (e.g. 'Root Cause #1' followed by 'DELAYED TRACE PRESENTATION'),
+    they are merged into a single combined heading:
+        - Text is joined: 'Root Cause #1: DELAYED TRACE PRESENTATION'
+          (If the first heading already ends in punctuation like ':' or '-', space is used).
+        - Heading level takes the HIGHEST level (numerically lowest: min(levels)) among the merged titles.
+        - Subsequent merged heading blocks in the run are converted into empty title blocks so they
+          produce no duplicate output and no subtree cascade errors.
 
     Returns:
         (updated_content_list_v2, summary_stats)
     """
-    # 1. Flatten all blocks in document reading order
     flattened_blocks: List[Tuple[int, int, Dict[str, Any]]] = []
     for page_idx, page in enumerate(content_list_v2):
         for block_idx, block in enumerate(page):
             flattened_blocks.append((page_idx, block_idx, block))
 
-    demotions: List[Dict[str, Any]] = []
-
+    merges: List[Dict[str, Any]] = []
     curr_idx = 0
     total_blocks = len(flattened_blocks)
 
@@ -559,17 +663,17 @@ def demote_consecutive_headings(
         page_idx, block_idx, block = flattened_blocks[curr_idx]
         block_type = block.get("type", "")
 
-        # Look for a heading with valid text
         if block_type == "title":
             content_obj = block.get("content", {})
             title_spans = content_obj.get("title_content", [])
-            heading_text = "".join(
+            primary_text = "".join(
                 s.get("content", "") for s in title_spans if isinstance(s, dict)
             ).strip()
 
-            if heading_text:
-                prev_heading_block = block
-                prev_heading_text = heading_text
+            if primary_text:
+                consecutive_titles: List[Tuple[int, int, Dict[str, Any], str, int]] = [
+                    (page_idx, block_idx, block, primary_text, int(content_obj.get("level", 1)))
+                ]
                 scan_idx = curr_idx + 1
 
                 while scan_idx < total_blocks:
@@ -592,10 +696,10 @@ def demote_consecutive_headings(
                             if not p_text:
                                 scan_idx += 1
                                 continue
-                        # Substantive content encountered; ends the immediate consecutive heading run
+                        # Substantive content encountered; ends the consecutive run
                         break
 
-                    # Found another heading
+                    # Found another consecutive heading
                     if next_type == "title":
                         next_title_spans = next_content.get("title_content", [])
                         next_text = "".join(
@@ -606,90 +710,85 @@ def demote_consecutive_headings(
                             scan_idx += 1
                             continue
 
-                        prev_level = int(prev_heading_block.get("content", {}).get("level", 1))
-                        curr_level = int(next_content.get("level", 1))
-
-                        # If next heading is at the same level or higher (numerically <= prev_level),
-                        # demote it to be one level deeper
-                        if curr_level <= prev_level:
-                            demoted_level = min(6, prev_level + 1)
-                            delta = demoted_level - curr_level
-                            orig_target_level = curr_level
-
-                            next_content["level"] = demoted_level
-
-                            demotions.append({
-                                "page": next_page_idx + 1,
-                                "parent_heading": prev_heading_text,
-                                "parent_level": prev_level,
-                                "demoted_heading": next_text,
-                                "old_level": curr_level,
-                                "new_level": demoted_level,
-                            })
-
-                            logger.info(
-                                f"🔄 [Consecutive Scan] Demoted '{next_text[:35]}' "
-                                f"(H{curr_level} -> H{demoted_level}) following '{prev_heading_text[:35]}' (H{prev_level})"
-                            )
-
-                            # Shift all subsequent child headings under next_block by delta
-                            # until we reach a heading with level <= orig_target_level
-                            if delta > 0:
-                                child_scan_idx = scan_idx + 1
-                                while child_scan_idx < total_blocks:
-                                    _, _, ch_block = flattened_blocks[child_scan_idx]
-                                    if ch_block.get("type") == "title":
-                                        ch_content = ch_block.get("content", {})
-                                        ch_title_spans = ch_content.get("title_content", [])
-                                        ch_text = "".join(
-                                            s.get("content", "") for s in ch_title_spans if isinstance(s, dict)
-                                        ).strip()
-
-                                        if ch_text:
-                                            ch_level = int(ch_content.get("level", 1))
-                                            # Stop when reaching a heading at the same or higher level than next_text's original level
-                                            if ch_level <= orig_target_level:
-                                                break
-                                            # It is a child/descendant heading; shift it down
-                                            new_ch_level = min(6, ch_level + delta)
-                                            ch_content["level"] = new_ch_level
-                                            demotions.append({
-                                                "page": flattened_blocks[child_scan_idx][0] + 1,
-                                                "parent_heading": next_text,
-                                                "parent_level": demoted_level,
-                                                "demoted_heading": ch_text,
-                                                "old_level": ch_level,
-                                                "new_level": new_ch_level,
-                                                "reason": "subtree_cascade",
-                                            })
-                                            logger.info(
-                                                f"   ↳ [Subtree Shift] Demoted child '{ch_text[:35]}' "
-                                                f"(H{ch_level} -> H{new_ch_level}) by +{delta}"
-                                            )
-                                    child_scan_idx += 1
-
-                        # Advance prev_heading for cascading (e.g. 3 or more consecutive headings)
-                        prev_heading_block = next_block
-                        prev_heading_text = next_text
+                        consecutive_titles.append((
+                            next_page_idx,
+                            next_block_idx,
+                            next_block,
+                            next_text,
+                            int(next_content.get("level", 1)),
+                        ))
                         scan_idx += 1
                         continue
 
                     # Any other unrecognized block type ends the run
                     break
 
+                # If 2 or more consecutive headings exist, merge them
+                if len(consecutive_titles) > 1:
+                    # Level must be the HIGHEST level (numerically lowest: min(levels))
+                    highest_level = min(t[4] for t in consecutive_titles)
+
+                    # Join texts intelligently
+                    combined_text_parts: List[str] = []
+                    for idx, (_, _, _, t_text, _) in enumerate(consecutive_titles):
+                        if idx == 0:
+                            combined_text_parts.append(t_text)
+                        else:
+                            prev_t = combined_text_parts[-1].rstrip()
+                            if prev_t.endswith((":", "-", "—", "/", "|")):
+                                combined_text_parts.append(f" {t_text}")
+                            else:
+                                combined_text_parts.append(f"{separator}{t_text}")
+
+                    merged_title_text = "".join(combined_text_parts).strip()
+
+                    # Update the primary (first) block with merged text and highest level
+                    primary_block = consecutive_titles[0][2]
+                    primary_block["content"]["level"] = highest_level
+                    primary_block["content"]["title_content"] = [
+                        {"type": "text", "content": merged_title_text}
+                    ]
+
+                    # Clear out subsequent merged title blocks so they don't produce duplicate output
+                    for _, _, sub_block, _, _ in consecutive_titles[1:]:
+                        sub_block["content"]["title_content"] = []
+                        sub_block["content"]["_merged_into_parent"] = True
+
+                    merges.append({
+                        "page": consecutive_titles[0][0] + 1,
+                        "original_headings": [t[3] for t in consecutive_titles],
+                        "original_levels": [t[4] for t in consecutive_titles],
+                        "merged_heading": merged_title_text,
+                        "assigned_level": highest_level,
+                    })
+
+                    logger.info(
+                        f"🔗 [Consecutive Merge] Combined {len(consecutive_titles)} headings into: "
+                        f"'{merged_title_text[:50]}' (assigned highest level: H{highest_level})"
+                    )
+
+                    # Advance curr_idx past the scanned cluster
+                    curr_idx = scan_idx
+                    continue
+
         curr_idx += 1
 
     summary_stats = {
-        "consecutive_demotions": len(demotions),
-        "demotion_details": demotions,
+        "merged_headings_count": len(merges),
+        "merge_details": merges,
     }
 
-    if demotions:
-        logger.info(
-            f"✓ [Consecutive Scan] Adjusted {len(demotions)} heading(s) via downward demotion & subtree cascading."
-        )
+    if merges:
+        logger.info(f"✓ [Consecutive Merge] Combined {len(merges)} consecutive heading group(s).")
 
     return content_list_v2, summary_stats
+
+
+def demote_consecutive_headings(
+    content_list_v2: List[List[Dict[str, Any]]],
+) -> Tuple[List[List[Dict[str, Any]]], Dict[str, Any]]:
+    """Backward-compatibility alias pointing to merge_consecutive_headings."""
+    return merge_consecutive_headings(content_list_v2)
 
 
 def convert_v2_to_markdown(
@@ -827,10 +926,15 @@ def process_content_list_v2_to_clean_markdown(
     else:
         corrected_v2, summary = correct_title_hierarchy(v2_data, pdf_p)
 
-    # Post-scan: Demote consecutive headings without intervening body paragraphs or content
-    corrected_v2, consec_summary = demote_consecutive_headings(corrected_v2)
-    summary["consecutive_demotions"] = consec_summary.get("consecutive_demotions", 0)
-    summary["consecutive_demotion_details"] = consec_summary.get("demotion_details", [])
+        # Sequential scan to normalize heading skips (e.g. H1 -> H3 -> H6 becomes H1 -> H2 -> H3)
+        corrected_v2, norm_summary = normalize_heading_levels(corrected_v2)
+        summary["level_normalization_count"] = norm_summary.get("normalized_count", 0)
+        summary["level_normalization_details"] = norm_summary.get("adjustments", [])
+
+    # Post-scan: Merge consecutive headings without intervening body paragraphs or content
+    corrected_v2, merge_summary = merge_consecutive_headings(corrected_v2)
+    summary["merged_consecutive_headings"] = merge_summary.get("merged_headings_count", 0)
+    summary["merge_details"] = merge_summary.get("merge_details", [])
 
     # Save duplicated corrected v2
     if output_v2_path is None:

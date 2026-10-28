@@ -375,132 +375,80 @@ def test_demote_consecutive_headings_with_intervening_image():
     assert updated_v2[0][2]["content"]["level"] == 2
 
 
-def test_demote_consecutive_headings_subtree_cascade():
-    """Test that demoting a parent heading also shifts down its child headings until a same-or-higher header is reached."""
-    from mineru_converter.exporters.hierarchy_corrector import demote_consecutive_headings
+def test_merge_consecutive_headings_basic():
+    """Test that consecutive headings merge into a single heading taking the highest level."""
+    from mineru_converter.exporters.hierarchy_corrector import merge_consecutive_headings, convert_v2_to_markdown
 
     mock_v2 = [
         [
-            {"type": "title", "content": {"title_content": [{"type": "text", "content": "## hh"}], "level": 2}},
-            {"type": "title", "content": {"title_content": [{"type": "text", "content": "## gg"}], "level": 2}},
-            {"type": "paragraph", "content": {"paragraph_content": [{"type": "text", "content": "Body in gg"}]}},
-            {"type": "title", "content": {"title_content": [{"type": "text", "content": "### ddd"}], "level": 3}},
-            {"type": "paragraph", "content": {"paragraph_content": [{"type": "text", "content": "Body in ddd"}]}},
-            {"type": "title", "content": {"title_content": [{"type": "text", "content": "#### eee"}], "level": 4}},
-            {"type": "paragraph", "content": {"paragraph_content": [{"type": "text", "content": "Body in eee"}]}},
-            {"type": "title", "content": {"title_content": [{"type": "text", "content": "## next_major_section"}], "level": 2}},
-            {"type": "paragraph", "content": {"paragraph_content": [{"type": "text", "content": "Body in next section"}]}},
+            {"type": "title", "content": {"title_content": [{"type": "text", "content": "Root Cause #1"}], "level": 4}},
+            {"type": "title", "content": {"title_content": [{"type": "text", "content": "DELAYED TRACE PRESENTATION"}], "level": 4}},
+            {"type": "paragraph", "content": {"paragraph_content": [{"type": "text", "content": "Paragraph 1"}]}},
+            {"type": "title", "content": {"title_content": [{"type": "text", "content": "Root Cause #2"}], "level": 4}},
+            {"type": "title", "content": {"title_content": [{"type": "text", "content": "INSUFFICIENT TOUCH SCREEN SENSITIVITY"}], "level": 4}},
+            {"type": "paragraph", "content": {"paragraph_content": [{"type": "text", "content": "Paragraph 2"}]}},
         ]
     ]
 
-    updated_v2, summary = demote_consecutive_headings(mock_v2)
+    updated_v2, summary = merge_consecutive_headings(mock_v2)
 
-    # ## hh stays H2
-    assert updated_v2[0][0]["content"]["level"] == 2
-    # ## gg was consecutive with hh -> demoted to H3
-    assert updated_v2[0][1]["content"]["level"] == 3
-    # ### ddd was child of gg -> shifted down to H4
+    assert summary["merged_headings_count"] == 2
+    # First merged heading
+    assert updated_v2[0][0]["content"]["level"] == 4
+    assert updated_v2[0][0]["content"]["title_content"][0]["content"] == "Root Cause #1: DELAYED TRACE PRESENTATION"
+    # Second title block is emptied
+    assert updated_v2[0][1]["content"]["title_content"] == []
+
+    # Second merged heading remains sibling at Level 4 (NOT nested/demoted!)
     assert updated_v2[0][3]["content"]["level"] == 4
-    # #### eee was child of ddd -> shifted down to H5
-    assert updated_v2[0][5]["content"]["level"] == 5
-    # ## next_major_section is H2 (<= original gg level 2) -> untouched, stays H2
-    assert updated_v2[0][7]["content"]["level"] == 2
+    assert updated_v2[0][3]["content"]["title_content"][0]["content"] == "Root Cause #2: INSUFFICIENT TOUCH SCREEN SENSITIVITY"
+    assert updated_v2[0][4]["content"]["title_content"] == []
+
+    # Verify rendered markdown
+    md = convert_v2_to_markdown(updated_v2)
+    assert "#### Root Cause #1: DELAYED TRACE PRESENTATION" in md
+    assert "#### Root Cause #2: INSUFFICIENT TOUCH SCREEN SENSITIVITY" in md
+    assert "###### Root Cause #2" not in md
 
 
-def test_demote_consecutive_headings_higher_level_demoted():
-    """Test Option B: when h1 is H3 and next consecutive heading h2 is H2 with no body, h2 is demoted to H4."""
-    from mineru_converter.exporters.hierarchy_corrector import demote_consecutive_headings
-
-    mock_v2 = [
-        [
-            {"type": "title", "content": {"title_content": [{"type": "text", "content": "### h1"}], "level": 3}},
-            {"type": "title", "content": {"title_content": [{"type": "text", "content": "## h2"}], "level": 2}},
-            {"type": "paragraph", "content": {"paragraph_content": [{"type": "text", "content": "Body in h2"}]}},
-        ]
-    ]
-
-    updated_v2, summary = demote_consecutive_headings(mock_v2)
-
-    # h1 stays H3
-    assert updated_v2[0][0]["content"]["level"] == 3
-    # h2 is demoted to min(6, 3 + 1) = H4
-    assert updated_v2[0][1]["content"]["level"] == 4
-    assert summary["consecutive_demotions"] == 1
-
-
-def test_demote_consecutive_headings_nested_multi_level():
-    """Test 3 consecutive headings followed by child headings."""
-    from mineru_converter.exporters.hierarchy_corrector import demote_consecutive_headings
+def test_merge_consecutive_headings_takes_highest_level():
+    """Test that merging ### h1 (level 3) and ## h2 (level 2) assigns the highest level (H2)."""
+    from mineru_converter.exporters.hierarchy_corrector import merge_consecutive_headings, convert_v2_to_markdown
 
     mock_v2 = [
         [
-            {"type": "title", "content": {"title_content": [{"type": "text", "content": "## A"}], "level": 2}},
-            {"type": "title", "content": {"title_content": [{"type": "text", "content": "## B"}], "level": 2}},
-            {"type": "title", "content": {"title_content": [{"type": "text", "content": "## C"}], "level": 2}},
-            {"type": "paragraph", "content": {"paragraph_content": [{"type": "text", "content": "Body in C"}]}},
-            {"type": "title", "content": {"title_content": [{"type": "text", "content": "### D"}], "level": 3}},
-            {"type": "paragraph", "content": {"paragraph_content": [{"type": "text", "content": "Body in D"}]}},
-            {"type": "title", "content": {"title_content": [{"type": "text", "content": "## NextSection"}], "level": 2}},
+            {"type": "title", "content": {"title_content": [{"type": "text", "content": "h1"}], "level": 3}},
+            {"type": "title", "content": {"title_content": [{"type": "text", "content": "h2"}], "level": 2}},
+            {"type": "paragraph", "content": {"paragraph_content": [{"type": "text", "content": "Body text"}]}},
         ]
     ]
 
-    updated_v2, summary = demote_consecutive_headings(mock_v2)
+    updated_v2, summary = merge_consecutive_headings(mock_v2)
 
-    # A stays H2
+    assert summary["merged_headings_count"] == 1
+    # min(3, 2) = 2 (Highest level is H2)
     assert updated_v2[0][0]["content"]["level"] == 2
-    # B becomes H3
-    assert updated_v2[0][1]["content"]["level"] == 3
-    # C becomes H4
-    assert updated_v2[0][2]["content"]["level"] == 4
-    # D was H3 child under C (which was demoted from 2 -> 4, delta=+2) -> D should be H5
-    assert updated_v2[0][4]["content"]["level"] == 5
-    # NextSection stays H2
-    assert updated_v2[0][6]["content"]["level"] == 2
+    assert updated_v2[0][0]["content"]["title_content"][0]["content"] == "h1: h2"
+
+    md = convert_v2_to_markdown(updated_v2)
+    assert "## h1: h2" in md
+    assert "###" not in md
 
 
-def test_demote_nested_consecutive_headings_with_grandchild():
-    """
-    Test nested consecutive headings inside an already-demoted subtree:
-    ## Section A (H2)
-    ## Section B (H2 -> demoted to H3, delta=+1)
-    Paragraph
-    ### Sub C (H3 -> shifted to H4)
-    ### Sub D (H3 -> shifted to H4, then consecutive with Sub C -> demoted to H5, delta=+1)
-    Paragraph
-    #### Grandchild E (H4 -> shifted to H5 with Section B, then shifted to H6 with Sub D!)
-    Paragraph
-    ## Section Next (H2 -> stops all subtrees, stays H2)
-    """
-    from mineru_converter.exporters.hierarchy_corrector import demote_consecutive_headings
+def test_merge_consecutive_headings_with_punctuation():
+    """Test that headings ending in ':' or '-' don't get double punctuation."""
+    from mineru_converter.exporters.hierarchy_corrector import merge_consecutive_headings
 
     mock_v2 = [
         [
-            {"type": "title", "content": {"title_content": [{"type": "text", "content": "## Section A"}], "level": 2}},
-            {"type": "title", "content": {"title_content": [{"type": "text", "content": "## Section B"}], "level": 2}},
-            {"type": "paragraph", "content": {"paragraph_content": [{"type": "text", "content": "Body in Section B"}]}},
-            {"type": "title", "content": {"title_content": [{"type": "text", "content": "### Sub C"}], "level": 3}},
-            {"type": "title", "content": {"title_content": [{"type": "text", "content": "### Sub D"}], "level": 3}},
-            {"type": "paragraph", "content": {"paragraph_content": [{"type": "text", "content": "Body in Sub D"}]}},
-            {"type": "title", "content": {"title_content": [{"type": "text", "content": "#### Grandchild E"}], "level": 4}},
-            {"type": "paragraph", "content": {"paragraph_content": [{"type": "text", "content": "Body in Grandchild E"}]}},
-            {"type": "title", "content": {"title_content": [{"type": "text", "content": "## Section Next"}], "level": 2}},
+            {"type": "title", "content": {"title_content": [{"type": "text", "content": "Step 1:"}], "level": 2}},
+            {"type": "title", "content": {"title_content": [{"type": "text", "content": "Setup Hardware"}], "level": 2}},
+            {"type": "paragraph", "content": {"paragraph_content": [{"type": "text", "content": "Plug it in."}]}},
         ]
     ]
 
-    updated_v2, summary = demote_consecutive_headings(mock_v2)
-
-    # Section A stays H2
-    assert updated_v2[0][0]["content"]["level"] == 2
-    # Section B demoted to H3
-    assert updated_v2[0][1]["content"]["level"] == 3
-    # Sub C was shifted to H4 (as child of Section B)
-    assert updated_v2[0][3]["content"]["level"] == 4
-    # Sub D is consecutive with Sub C (both H4) -> demoted to H5!
-    assert updated_v2[0][4]["content"]["level"] == 5
-    # Grandchild E was shifted by Section B (+1 -> H5), then Sub D demoted (+1 -> H6)
-    assert updated_v2[0][6]["content"]["level"] == 6
-    # Section Next untouched, stays H2
-    assert updated_v2[0][8]["content"]["level"] == 2
+    updated_v2, _ = merge_consecutive_headings(mock_v2)
+    assert updated_v2[0][0]["content"]["title_content"][0]["content"] == "Step 1: Setup Hardware"
 
 
 
@@ -550,6 +498,41 @@ def test_correct_title_hierarchy_direct_openai_success(monkeypatch):
     assert summary["corrected_count"] == 1
     assert corrected_v2[0][0]["content"]["level"] == 1
     assert corrected_v2[0][2]["content"]["level"] == 2
+
+
+def test_normalize_heading_levels():
+    """Verify that heading level skips (e.g. H1 -> H3 -> H6) are compressed sequentially into H1 -> H2 -> H3."""
+    from mineru_converter.exporters.hierarchy_corrector import normalize_heading_levels
+
+    mock_v2 = [
+        [
+            {"type": "title", "content": {"title_content": [{"type": "text", "content": "he"}], "level": 1}},
+            {"type": "paragraph", "content": {"paragraph_content": [{"type": "text", "content": "Body 1"}]}},
+            {"type": "title", "content": {"title_content": [{"type": "text", "content": "g"}], "level": 3}},
+            {"type": "paragraph", "content": {"paragraph_content": [{"type": "text", "content": "Body 2"}]}},
+            {"type": "title", "content": {"title_content": [{"type": "text", "content": "h"}], "level": 6}},
+            {"type": "paragraph", "content": {"paragraph_content": [{"type": "text", "content": "Body 3"}]}},
+            # Sibling at same relative level (was 6 -> should be 3)
+            {"type": "title", "content": {"title_content": [{"type": "text", "content": "h_sibling"}], "level": 6}},
+            # Climb back to root section (was 1 -> remains 1)
+            {"type": "title", "content": {"title_content": [{"type": "text", "content": "next_main_section"}], "level": 1}},
+            # Sub-heading under next section (was 4 -> becomes 2)
+            {"type": "title", "content": {"title_content": [{"type": "text", "content": "sub_next"}], "level": 4}},
+        ]
+    ]
+
+    normalized_v2, summary = normalize_heading_levels(mock_v2)
+
+    blocks = normalized_v2[0]
+    # Check levels
+    assert blocks[0]["content"]["level"] == 1  # "he" (H1)
+    assert blocks[2]["content"]["level"] == 2  # "g" (H3 -> H2)
+    assert blocks[4]["content"]["level"] == 3  # "h" (H6 -> H3)
+    assert blocks[6]["content"]["level"] == 3  # "h_sibling" (H6 -> H3)
+    assert blocks[7]["content"]["level"] == 1  # "next_main_section" (H1 -> H1)
+    assert blocks[8]["content"]["level"] == 2  # "sub_next" (H4 -> H2)
+    assert summary["normalized_count"] == 4
+
 
 
 

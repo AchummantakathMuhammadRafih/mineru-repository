@@ -9,6 +9,8 @@ from mineru_converter.exporters.postprocessor import create_standard_aliases
 from mineru_converter.exporters.hierarchy_corrector import (
     correct_title_hierarchy,
     correct_title_hierarchy_llm,
+    normalize_heading_levels,
+    merge_consecutive_headings,
     demote_consecutive_headings,
     convert_v2_to_markdown,
     process_content_list_v2_to_clean_markdown,
@@ -26,6 +28,8 @@ __all__ = [
     "create_standard_aliases",
     "correct_title_hierarchy",
     "correct_title_hierarchy_llm",
+    "normalize_heading_levels",
+    "merge_consecutive_headings",
     "demote_consecutive_headings",
     "convert_v2_to_markdown",
     "process_content_list_v2_to_clean_markdown",
