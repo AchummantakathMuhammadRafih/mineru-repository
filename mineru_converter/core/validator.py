@@ -39,6 +39,11 @@ def validate_pdf_document(
     if pdf_path.stat().st_size == 0:
         raise PDFValidationError(f"PDF file is empty (0 bytes): {pdf_path}")
 
+    # Non-PDF documents (docx, pptx, xlsx, html)
+    ext = pdf_path.suffix.lower()
+    if ext != ".pdf":
+        return 1, 0, 0
+
     try:
         reader = pypdf.PdfReader(str(pdf_path))
         if reader.is_encrypted:

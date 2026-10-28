@@ -31,6 +31,7 @@ class OutputFileManifest(BaseModel):
     # Clean / Corrected / Redacted Markdown artifacts
     clean_markdown_path: Optional[Path] = Field(None, description="Path to _clean.md Markdown document")
     redacted_markdown_path: Optional[Path] = Field(None, description="Path to _redacted.md Markdown document")
+    docling_chunks_path: Optional[Path] = Field(None, description="Path to docling_chunks.json hybrid chunks document")
     corrected_content_list_v2_path: Optional[Path] = Field(None, description="Path to _content_list_v2_corrected.json")
 
     # Meta / summary artifacts
@@ -44,6 +45,7 @@ class OutputFileManifest(BaseModel):
             self.markdown_path,
             self.clean_markdown_path,
             self.redacted_markdown_path,
+            self.docling_chunks_path,
             self.content_list_v1_path,
             self.content_list_v2_path,
             self.corrected_content_list_v2_path,
@@ -68,6 +70,7 @@ class OutputFileManifest(BaseModel):
             "markdown": str(self.markdown_path) if self.markdown_path else None,
             "clean_markdown": str(self.clean_markdown_path) if self.clean_markdown_path else None,
             "redacted_markdown": str(self.redacted_markdown_path) if self.redacted_markdown_path else None,
+            "docling_chunks": str(self.docling_chunks_path) if self.docling_chunks_path else None,
             "content_list_v1": str(self.content_list_v1_path) if self.content_list_v1_path else None,
             "content_list_v2": str(self.content_list_v2_path) if self.content_list_v2_path else None,
             "corrected_content_list_v2": str(self.corrected_content_list_v2_path) if self.corrected_content_list_v2_path else None,

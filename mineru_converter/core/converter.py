@@ -31,7 +31,16 @@ from mineru_converter.exporters.redactor import (
     redact_markdown_file,
 )
 
-from mineru_converter.models.enums import BackendType, ParseMethod
+from mineru_converter.models.enums import BackendType, ParseMethod, ParserEngine
+from mineru_converter.parsers.marker_parser import convert_pdf_with_marker
+from mineru_converter.parsers.office_parser import (
+    convert_docx_to_markdown,
+    convert_pptx_to_markdown,
+    convert_xlsx_to_markdown,
+    convert_html_to_markdown,
+)
+from mineru_converter.parsers.docling_chunker import chunk_markdown_with_docling
+from mineru_converter.exporters.markdown_hierarchy import correct_markdown_heading_hierarchy
 from mineru_converter.models.schemas import BatchSummary, ConversionResult, OutputFileManifest
 from mineru_converter.utils.file_utils import ensure_directory, sanitize_filename
 from mineru_converter.utils.logging_utils import get_logger
@@ -136,84 +145,145 @@ class MinerUConverter:
         method_val = cfg.method.value if hasattr(cfg.method, "value") else str(cfg.method)
         effort_val = cfg.effort.value if hasattr(cfg.effort, "value") else str(cfg.effort)
 
-        # 3. Execute MinerU parser
+        # 3. Execute Parser (MinerU or Marker)
         if step_callback:
             step_callback("PARSING")
 
         parse_start_time = time.time()
-        logger.info(
-            f"⚙️ [MinerU Parser] Starting parsing engine for '{doc_stem}' "
-            f"(backend={backend_val}, method={method_val}, pages={processed_pages}, "
-            f"formula={cfg.formula_enable}, table={cfg.table_enable})..."
-        )
-
-        try:
-            do_parse(
-                output_dir=str(target_root_dir),
-                pdf_file_names=[doc_stem],
-                pdf_bytes_list=[pdf_bytes],
-                p_lang_list=[cfg.lang],
-                backend=backend_val,
-                parse_method=method_val,
-                formula_enable=cfg.formula_enable,
-                table_enable=cfg.table_enable,
-                server_url=cfg.server_url,
-                f_draw_layout_bbox=cfg.draw_layout_bbox,
-                f_draw_span_bbox=cfg.draw_span_bbox,
-                f_dump_md=cfg.dump_md,
-                f_dump_middle_json=cfg.dump_middle_json,
-                f_dump_model_output=cfg.dump_model_output,
-                f_dump_orig_pdf=cfg.dump_orig_pdf,
-                f_dump_content_list=cfg.dump_content_list,
-                f_make_md_mode=MakeMode.MM_MD,
-                start_page_id=eff_start,
-                end_page_id=eff_end,
-                image_analysis=cfg.image_analysis,
-                client_side_output_generation=cfg.client_side_output_generation,
-                effort=effort_val,
-            )
-            parse_dur = time.time() - parse_start_time
-            logger.info(f"✓ [MinerU Parser] Core document parse completed in {parse_dur:.2f}s for '{doc_stem}'.")
-        except Exception as parse_err:
-            logger.exception(f"MinerU execution error on {pdf_file.name}: {parse_err}")
-            empty_manifest = OutputFileManifest(
-                document_name=doc_stem,
-                output_directory=target_root_dir / doc_stem
-            )
-            return ConversionResult(
-                success=False,
-                input_path=pdf_file,
-                document_name=doc_stem,
-                manifest=empty_manifest,
-                error_message=f"MinerU conversion failed: {parse_err}",
-                started_at=start_dt,
-                finished_at=datetime.utcnow(),
-                duration_seconds=time.time() - start_time,
-            )
-
-        # 4. Resolve output directory
-        # MinerU puts files into output_dir / doc_stem / method (or similar)
-        # Check standard subdirectories
         actual_doc_dir = None
         method_str = method_val
-        possible_dirs = [
-            target_root_dir / doc_stem / method_str,
-            target_root_dir / doc_stem / "auto",
-            target_root_dir / doc_stem / "vlm",
-            target_root_dir / doc_stem / "hybrid",
-            target_root_dir / doc_stem / "pipeline",
-            target_root_dir / doc_stem,
-        ]
+        file_ext = pdf_file.suffix.lower()
 
-        for p_dir in possible_dirs:
-            if p_dir.exists() and any(p_dir.iterdir()):
-                actual_doc_dir = p_dir
-                break
+        # Branch A: Office / HTML documents (docx, pptx, xlsx, html, htm)
+        if file_ext in (".docx", ".pptx", ".xlsx", ".html", ".htm"):
+            logger.info(f"⚙️ [Office/HTML Parser] Processing {file_ext} file '{doc_stem}'...")
+            actual_doc_dir = target_root_dir / doc_stem / "converted"
+            actual_doc_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                if file_ext == ".docx":
+                    converted_md = convert_docx_to_markdown(pdf_file, actual_doc_dir)
+                elif file_ext == ".pptx":
+                    converted_md = convert_pptx_to_markdown(pdf_file, actual_doc_dir)
+                elif file_ext == ".xlsx":
+                    converted_md = convert_xlsx_to_markdown(pdf_file, actual_doc_dir)
+                elif file_ext in (".html", ".htm"):
+                    converted_md = convert_html_to_markdown(pdf_file, actual_doc_dir)
+                parse_dur = time.time() - parse_start_time
+                logger.info(f"✓ [Office/HTML Parser] Core parse completed in {parse_dur:.2f}s for '{doc_stem}'.")
+            except Exception as conv_err:
+                logger.exception(f"Document parsing error on {pdf_file.name}: {conv_err}")
+                empty_manifest = OutputFileManifest(
+                    document_name=doc_stem,
+                    output_directory=actual_doc_dir,
+                )
+                return ConversionResult(
+                    success=False,
+                    input_path=pdf_file,
+                    document_name=doc_stem,
+                    manifest=empty_manifest,
+                    error_message=f"Document conversion failed: {conv_err}",
+                    started_at=start_dt,
+                    finished_at=datetime.utcnow(),
+                    duration_seconds=time.time() - start_time,
+                )
 
-        if actual_doc_dir is None:
-            actual_doc_dir = target_root_dir / doc_stem / method_str
+        # Branch B: Marker PDF parser
+        elif getattr(cfg, "parser_engine", ParserEngine.MINERU) == ParserEngine.MARKER:
+            logger.info(f"⚙️ [Marker Parser] Starting Marker parsing engine for '{doc_stem}'...")
+            actual_doc_dir = target_root_dir / doc_stem / "marker"
+            actual_doc_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                marker_md_path, marker_images_dir = convert_pdf_with_marker(
+                    pdf_path=pdf_file,
+                    output_dir=actual_doc_dir,
+                    langs=cfg.lang,
+                )
+                parse_dur = time.time() - parse_start_time
+                logger.info(f"✓ [Marker Parser] Core parse completed in {parse_dur:.2f}s for '{doc_stem}'.")
+            except Exception as marker_err:
+                logger.exception(f"Marker execution error on {pdf_file.name}: {marker_err}")
+                empty_manifest = OutputFileManifest(
+                    document_name=doc_stem,
+                    output_directory=actual_doc_dir,
+                )
+                return ConversionResult(
+                    success=False,
+                    input_path=pdf_file,
+                    document_name=doc_stem,
+                    manifest=empty_manifest,
+                    error_message=f"Marker conversion failed: {marker_err}",
+                    started_at=start_dt,
+                    finished_at=datetime.utcnow(),
+                    duration_seconds=time.time() - start_time,
+                )
+        else:
+            logger.info(
+                f"⚙️ [MinerU Parser] Starting parsing engine for '{doc_stem}' "
+                f"(backend={backend_val}, method={method_val}, pages={processed_pages}, "
+                f"formula={cfg.formula_enable}, table={cfg.table_enable})..."
+            )
+            try:
+                do_parse(
+                    output_dir=str(target_root_dir),
+                    pdf_file_names=[doc_stem],
+                    pdf_bytes_list=[pdf_bytes],
+                    p_lang_list=[cfg.lang],
+                    backend=backend_val,
+                    parse_method=method_val,
+                    formula_enable=cfg.formula_enable,
+                    table_enable=cfg.table_enable,
+                    server_url=cfg.server_url,
+                    f_draw_layout_bbox=cfg.draw_layout_bbox,
+                    f_draw_span_bbox=cfg.draw_span_bbox,
+                    f_dump_md=cfg.dump_md,
+                    f_dump_middle_json=cfg.dump_middle_json,
+                    f_dump_model_output=cfg.dump_model_output,
+                    f_dump_orig_pdf=cfg.dump_orig_pdf,
+                    f_dump_content_list=cfg.dump_content_list,
+                    f_make_md_mode=MakeMode.MM_MD,
+                    start_page_id=eff_start,
+                    end_page_id=eff_end,
+                    image_analysis=cfg.image_analysis,
+                    client_side_output_generation=cfg.client_side_output_generation,
+                    effort=effort_val,
+                )
+                parse_dur = time.time() - parse_start_time
+                logger.info(f"✓ [MinerU Parser] Core document parse completed in {parse_dur:.2f}s for '{doc_stem}'.")
+            except Exception as parse_err:
+                logger.exception(f"MinerU execution error on {pdf_file.name}: {parse_err}")
+                empty_manifest = OutputFileManifest(
+                    document_name=doc_stem,
+                    output_directory=target_root_dir / doc_stem
+                )
+                return ConversionResult(
+                    success=False,
+                    input_path=pdf_file,
+                    document_name=doc_stem,
+                    manifest=empty_manifest,
+                    error_message=f"MinerU conversion failed: {parse_err}",
+                    started_at=start_dt,
+                    finished_at=datetime.utcnow(),
+                    duration_seconds=time.time() - start_time,
+                )
 
-        logger.info(f"📂 [MinerU Parser] Output directory resolved: {actual_doc_dir}")
+            # 4. Resolve output directory for MinerU
+            possible_dirs = [
+                target_root_dir / doc_stem / method_str,
+                target_root_dir / doc_stem / "auto",
+                target_root_dir / doc_stem / "vlm",
+                target_root_dir / doc_stem / "hybrid",
+                target_root_dir / doc_stem / "pipeline",
+                target_root_dir / doc_stem,
+            ]
+            for p_dir in possible_dirs:
+                if p_dir.exists() and any(p_dir.iterdir()):
+                    actual_doc_dir = p_dir
+                    break
+
+            if actual_doc_dir is None:
+                actual_doc_dir = target_root_dir / doc_stem / method_str
+
+        logger.info(f"📂 [Parser] Output directory resolved: {actual_doc_dir}")
 
         # If image saving is disabled, remove the extracted images folder
         if not cfg.dump_images:
@@ -221,7 +291,7 @@ class MinerUConverter:
             if images_dir.exists() and images_dir.is_dir():
                 try:
                     shutil.rmtree(images_dir)
-                    logger.info(f"🖼️ [MinerU Parser] Removed images directory: {images_dir.name}")
+                    logger.info(f"🖼️ [Parser] Removed images directory: {images_dir.name}")
                 except Exception as rm_err:
                     logger.warning(f"Could not remove images directory: {rm_err}")
 
@@ -231,7 +301,7 @@ class MinerUConverter:
             doc_stem=doc_stem
         )
         logger.info(
-            f"📦 [MinerU Parser] Artifacts generated: "
+            f"📦 [Parser] Artifacts generated: "
             f"markdown={manifest.markdown_path.name if manifest.markdown_path else 'none'}, "
             f"v1_json={manifest.content_list_v1_path.name if manifest.content_list_v1_path else 'none'}, "
             f"v2_json={manifest.content_list_v2_path.name if manifest.content_list_v2_path else 'none'}"
@@ -249,44 +319,63 @@ class MinerUConverter:
         if step_callback:
             step_callback("HIERARCHY_CORRECTION")
 
-        if cfg.generate_clean_markdown and manifest.content_list_v2_path and manifest.content_list_v2_path.exists():
-            pdf_source_for_fonts = manifest.origin_pdf_path if (manifest.origin_pdf_path and manifest.origin_pdf_path.exists()) else pdf_file
-            try:
-                if cfg.use_llm_hierarchy:
-                    logger.info(
-                        f"🤖 [Hierarchy] Running LLM-based hierarchy correction for {pdf_file.name} "
-                        f"(deployment={cfg.azure_openai_deployment or 'default'})..."
-                    )
-                else:
-                    logger.info(
-                        f"📐 [Hierarchy] Running font-size heuristic hierarchy correction for {pdf_file.name}..."
-                    )
+        if cfg.generate_clean_markdown:
+            if manifest.content_list_v2_path and manifest.content_list_v2_path.exists():
+                # MinerU AST path: font-size heuristic or LLM correction on V2 JSON
+                pdf_source_for_fonts = manifest.origin_pdf_path if (manifest.origin_pdf_path and manifest.origin_pdf_path.exists()) else pdf_file
+                try:
+                    if cfg.use_llm_hierarchy:
+                        logger.info(
+                            f"🤖 [Hierarchy] Running LLM-based hierarchy correction for {pdf_file.name} "
+                            f"(deployment={cfg.azure_openai_deployment or 'default'})..."
+                        )
+                    else:
+                        logger.info(
+                            f"📐 [Hierarchy] Running font-size heuristic hierarchy correction for {pdf_file.name}..."
+                        )
 
-                corr_v2_path, clean_md_path, summary = process_content_list_v2_to_clean_markdown(
-                    v2_json_path=manifest.content_list_v2_path,
-                    pdf_path=pdf_source_for_fonts,
-                    filter_images=True,
-                    include_footnotes=False,
-                    use_llm=cfg.use_llm_hierarchy,
-                    openai_api_key=cfg.openai_api_key,
-                    openai_model=cfg.openai_model,
-                    openai_base_url=cfg.openai_base_url,
-                    azure_endpoint=cfg.azure_openai_endpoint,
-                    azure_api_key=cfg.azure_openai_api_key,
-                    azure_deployment=cfg.azure_openai_deployment,
-                    azure_api_version=cfg.azure_openai_api_version,
-                    temperature=cfg.llm_temperature,
-                    timeout=cfg.llm_timeout,
-                )
-                manifest.corrected_content_list_v2_path = corr_v2_path
-                manifest.clean_markdown_path = clean_md_path
-                logger.info(
-                    f"✓ [Hierarchy] Completed for {pdf_file.name} "
-                    f"using strategy: {summary.get('method', 'heuristics')} "
-                    f"({summary.get('corrected_count', 0)}/{summary.get('total_titles', 0)} headings corrected)"
-                )
-            except Exception as clean_err:
-                logger.warning(f"Could not generate clean markdown for {pdf_file.name}: {clean_err}")
+                    corr_v2_path, clean_md_path, summary = process_content_list_v2_to_clean_markdown(
+                        v2_json_path=manifest.content_list_v2_path,
+                        pdf_path=pdf_source_for_fonts,
+                        filter_images=True,
+                        include_footnotes=False,
+                        use_llm=cfg.use_llm_hierarchy,
+                        openai_api_key=cfg.openai_api_key,
+                        openai_model=cfg.openai_model,
+                        openai_base_url=cfg.openai_base_url,
+                        azure_endpoint=cfg.azure_openai_endpoint,
+                        azure_api_key=cfg.azure_openai_api_key,
+                        azure_deployment=cfg.azure_openai_deployment,
+                        azure_api_version=cfg.azure_openai_api_version,
+                        temperature=cfg.llm_temperature,
+                        timeout=cfg.llm_timeout,
+                    )
+                    manifest.corrected_content_list_v2_path = corr_v2_path
+                    manifest.clean_markdown_path = clean_md_path
+                    logger.info(
+                        f"✓ [Hierarchy] Completed for {pdf_file.name} "
+                        f"using strategy: {summary.get('method', 'heuristics')} "
+                        f"({summary.get('corrected_count', 0)}/{summary.get('total_titles', 0)} headings corrected)"
+                    )
+                except Exception as clean_err:
+                    logger.warning(f"Could not generate clean markdown for {pdf_file.name}: {clean_err}")
+
+            elif manifest.markdown_path and manifest.markdown_path.exists():
+                # Markdown path (DOCX, PPTX, XLSX, HTML, or Marker): direct Markdown-level hierarchy normalization & cleaning
+                try:
+                    logger.info(f"📐 [Hierarchy] Running markdown hierarchy correction on {pdf_file.name}...")
+                    raw_text = manifest.markdown_path.read_text(encoding="utf-8")
+                    clean_text, norm_summary = correct_markdown_heading_hierarchy(raw_text)
+                    clean_md_path = actual_doc_dir / f"{doc_stem}_clean.md"
+                    clean_md_path.write_text(clean_text, encoding="utf-8")
+                    manifest.clean_markdown_path = clean_md_path
+                    logger.info(
+                        f"✓ [Hierarchy] Clean markdown generated: "
+                        f"{norm_summary.get('adjusted_count', 0)}/{norm_summary.get('headings_count', 0)} headings normalized, "
+                        f"{norm_summary.get('merged_headings_count', 0)} consecutive headings merged -> {clean_md_path.name}"
+                    )
+                except Exception as clean_err:
+                    logger.warning(f"Could not generate clean markdown for {pdf_file.name}: {clean_err}")
 
         # 9. Redact clean markdown with Microsoft Presidio (masked with stars) if enabled
         if step_callback:
@@ -316,6 +405,35 @@ class MinerUConverter:
                     )
                 except Exception as redact_err:
                     logger.warning(f"Could not redact markdown for {pdf_file.name}: {redact_err}")
+
+        # 10. Docling 1024-token hybrid chunking on redacted markdown if enabled
+        if getattr(cfg, "enable_docling_chunking", True):
+            if step_callback:
+                step_callback("CHUNKING")
+            # Select target markdown for chunking: redacted > clean > raw
+            target_md_for_chunking = (
+                manifest.redacted_markdown_path
+                if (manifest.redacted_markdown_path and manifest.redacted_markdown_path.exists())
+                else (
+                    manifest.clean_markdown_path
+                    if (manifest.clean_markdown_path and manifest.clean_markdown_path.exists())
+                    else manifest.markdown_path
+                )
+            )
+            if target_md_for_chunking and target_md_for_chunking.exists():
+                try:
+                    chunking_out_path = actual_doc_dir / "docling_chunks.json"
+                    chunk_res = chunk_markdown_with_docling(
+                        markdown_path=target_md_for_chunking,
+                        output_json_path=chunking_out_path,
+                        docling_endpoint=getattr(cfg, "docling_endpoint", "http://localhost:5001/v1/chunk/hybrid/file"),
+                        max_tokens=getattr(cfg, "docling_max_tokens", 1024),
+                        timeout=getattr(cfg, "docling_timeout", 300.0),
+                    )
+                    if chunk_res and chunk_res.exists():
+                        manifest.docling_chunks_path = chunk_res
+                except Exception as chunk_err:
+                    logger.warning(f"Could not generate docling chunks for {pdf_file.name}: {chunk_err}")
 
         elapsed = time.time() - start_time
         end_dt = datetime.utcnow()

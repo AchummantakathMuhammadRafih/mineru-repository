@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel
 
-from mineru_converter.config.constants import DEFAULT_OUTPUT_DIR
+from mineru_converter.config.constants import DEFAULT_OUTPUT_DIR, SUPPORTED_DOC_EXTENSIONS
 from mineru_converter.config.settings import ConversionConfig
 from mineru_converter.core.database import JobDatabase, JobStatus, JobStep
 from mineru_converter.core.queue_worker import QueueWorker
@@ -101,6 +101,7 @@ class JobResponse(BaseModel):
     file_size: Optional[int] = 0
     status: str
     current_step: Optional[str] = JobStep.QUEUED
+    parser_engine: Optional[str] = "mineru"
     output_dir: Optional[str] = None
     markdown_file: Optional[str] = None
     error_message: Optional[str] = None
@@ -124,7 +125,10 @@ class QueueStatsResponse(BaseModel):
 # REST API Endpoints
 # ------------------------------------------------------------------------------
 @app.post("/api/upload", response_model=List[JobResponse])
-async def upload_documents(files: List[UploadFile] = File(...)):
+async def upload_documents(
+    files: List[UploadFile] = File(...),
+    parser_engine: Optional[str] = Query("mineru", description="Parser engine to use: 'mineru' or 'marker'"),
+):
     """
     Upload one or multiple PDF documents.
     Saves them to the input directory and enqueues them for sequential background processing.
@@ -136,30 +140,29 @@ async def upload_documents(files: List[UploadFile] = File(...)):
     enqueued_jobs = []
 
     for file in files:
-        if not file.filename.lower().endswith(".pdf"):
+        suffix = Path(file.filename).suffix.lower()
+        if suffix not in SUPPORTED_DOC_EXTENSIONS:
+            supported_str = ", ".join(sorted(SUPPORTED_DOC_EXTENSIONS))
             raise HTTPException(
                 status_code=400,
-                detail=f"Unsupported file format: {file.filename}. Only PDF documents are allowed.",
+                detail=f"Unsupported file format: {file.filename}. Supported formats are: {supported_str}",
             )
 
         # Sanitize filename and save to input folder
         clean_name = sanitize_filename(Path(file.filename).name)
-        if not clean_name.lower().endswith(".pdf"):
-            clean_name += ".pdf"
-
         target_path = INPUT_DIR / clean_name
         
         # If file already exists with same name, make unique if needed
         if target_path.exists():
             stem = target_path.stem
             timestamp = int(time.time())
-            target_path = INPUT_DIR / f"{stem}_{timestamp}.pdf"
+            target_path = INPUT_DIR / f"{stem}_{timestamp}{suffix}"
 
         content = await file.read()
         with open(target_path, "wb") as f:
             f.write(content)
 
-        job_record = worker.submit_file(target_path)
+        job_record = worker.submit_file(target_path, parser_engine=parser_engine or "mineru")
         enqueued_jobs.append(job_record)
 
     return enqueued_jobs
@@ -187,8 +190,11 @@ def get_job(job_id: int):
 
 
 @app.get("/api/jobs/{job_id}/download")
-def download_job_artifacts_zip(job_id: int):
-    """Download complete artifact package as a ZIP bundle (includes original PDF, clean MD, redacted MD, JSONs)."""
+def download_job_artifacts_zip(
+    job_id: int,
+    chunks_only: bool = Query(False, description="If true, zip contains only docling_chunks.json"),
+):
+    """Download artifact package as a ZIP bundle (all files, or docling_chunks.json only if chunks_only=true)."""
     worker = get_worker()
     job = worker.db.get_job(job_id)
     if not job:
@@ -205,7 +211,7 @@ def download_job_artifacts_zip(job_id: int):
     if not out_dir.exists():
         raise HTTPException(status_code=404, detail="Artifact output directory is missing from disk.")
 
-    zip_bytes = create_job_zip(output_dir=out_dir, original_file_path=orig_path)
+    zip_bytes = create_job_zip(output_dir=out_dir, original_file_path=orig_path, chunks_only=chunks_only)
     stem_name = Path(job["file_name"]).stem
     zip_filename = f"{stem_name}.zip"
 
@@ -238,6 +244,7 @@ def get_job_preview(job_id: int):
     redacted_md = out_path / f"{stem}_redacted.md"
     clean_md = out_path / f"{stem}_clean.md"
     raw_md = out_path / f"{stem}.md"
+    docling_chunks_file = out_path / "docling_chunks.json"
 
     return {
         "job_id": job_id,
@@ -246,7 +253,32 @@ def get_job_preview(job_id: int):
         "redacted_markdown": redacted_md.read_text(encoding="utf-8", errors="replace") if redacted_md.exists() else None,
         "clean_markdown": clean_md.read_text(encoding="utf-8", errors="replace") if clean_md.exists() else None,
         "raw_markdown": raw_md.read_text(encoding="utf-8", errors="replace") if raw_md.exists() else None,
+        "has_docling_chunks": docling_chunks_file.exists(),
     }
+
+
+@app.get("/api/jobs/{job_id}/chunks")
+def download_job_docling_chunks(job_id: int):
+    """Download docling_chunks.json hybrid chunks artifact."""
+    worker = get_worker()
+    job = worker.db.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job #{job_id} not found.")
+
+    if not job.get("output_dir"):
+        raise HTTPException(status_code=400, detail="Outputs not generated yet.")
+
+    out_path = Path(job["output_dir"])
+    chunks_file = out_path / "docling_chunks.json"
+    if not chunks_file.exists():
+        raise HTTPException(status_code=404, detail="docling_chunks.json was not generated for this document.")
+
+    content = chunks_file.read_text(encoding="utf-8", errors="replace")
+    return Response(
+        content=content,
+        media_type="application/json",
+        headers={"Content-Disposition": 'attachment; filename="docling_chunks.json"'},
+    )
 
 
 @app.get("/api/jobs/{job_id}/markdown/{md_type}")
@@ -649,6 +681,63 @@ WEB_UI_HTML = """<!DOCTYPE html>
       border: 1px solid var(--card-border);
     }
 
+    .parser-selector-container {
+      display: inline-flex;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 4px;
+      margin-bottom: 20px;
+      gap: 6px;
+    }
+
+    .parser-option {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 16px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 0.85rem;
+      font-weight: 500;
+      color: var(--text-muted);
+      transition: all 0.2s ease;
+      user-select: none;
+    }
+
+    .parser-option:hover {
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.04);
+    }
+
+    .parser-option.active {
+      background: var(--primary);
+      color: white;
+      box-shadow: 0 2px 8px rgba(99, 102, 241, 0.4);
+    }
+
+    .parser-badge {
+      display: inline-block;
+      font-size: 0.7rem;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .badge-mineru {
+      background: rgba(99, 102, 241, 0.15);
+      color: #A5B4FC;
+      border: 1px solid rgba(99, 102, 241, 0.3);
+    }
+
+    .badge-marker {
+      background: rgba(16, 185, 129, 0.15);
+      color: #6EE7B7;
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+
     .file-input {
       display: none;
     }
@@ -1008,20 +1097,36 @@ WEB_UI_HTML = """<!DOCTYPE html>
       </div>
     </div>
 
+    <!-- Parser Engine Selector -->
+    <div style="display: flex; justify-content: center; margin-bottom: 8px;">
+      <div class="parser-selector-container">
+        <div class="parser-option active" id="opt-mineru" onclick="selectParserEngine('mineru')">
+          <span>⚡</span>
+          <span>MinerU Engine</span>
+          <span style="font-size: 0.72rem; opacity: 0.8;">(Full Layout & AST)</span>
+        </div>
+        <div class="parser-option" id="opt-marker" onclick="selectParserEngine('marker')">
+          <span>📝</span>
+          <span>Marker Engine</span>
+          <span style="font-size: 0.72rem; opacity: 0.8;">(Direct Markdown)</span>
+        </div>
+      </div>
+    </div>
+
     <!-- Upload Card -->
     <div class="upload-card" id="drop-zone" onclick="document.getElementById('file-upload').click()">
-      <input type="file" id="file-upload" class="file-input" multiple accept=".pdf" onchange="handleFileSelect(event)">
+      <input type="file" id="file-upload" class="file-input" multiple accept=".pdf,.docx,.pptx,.xlsx,.html,.htm" onchange="handleFileSelect(event)">
       <div class="upload-icon">📄</div>
-      <div class="upload-title">Drop PDF documents here, or click to browse</div>
-      <div class="upload-desc">Documents are queued immediately and processed sequentially one at a time by the async background worker.</div>
+      <div class="upload-title">Drop documents here (PDF, Word, PowerPoint, Excel, HTML), or click to browse</div>
+      <div class="upload-desc">Supports PDF, DOCX, PPTX, XLSX, and HTML. Queued immediately and processed sequentially by the async background worker.</div>
       <div class="upload-pipeline-flow">
-        <span class="pipeline-step">1. Upload PDF</span>
+        <span class="pipeline-step">1. Upload Document</span>
         <span>→</span>
         <span class="pipeline-step">2. Async FIFO Queue</span>
         <span>→</span>
-        <span class="pipeline-step">3. MinerU Parse</span>
+        <span class="pipeline-step" id="flow-parse-step">3. Document Parse</span>
         <span>→</span>
-        <span class="pipeline-step">4. Font Hierarchy Correction</span>
+        <span class="pipeline-step">4. Outline Hierarchy Normalization</span>
         <span>→</span>
         <span class="pipeline-step">5. Presidio PII Masking</span>
       </div>
@@ -1033,6 +1138,10 @@ WEB_UI_HTML = """<!DOCTYPE html>
         <span>📋 Document Queue & Output Artifacts</span>
       </div>
       <div class="actions-group">
+        <label style="display: inline-flex; align-items: center; gap: 6px; font-size: 0.82rem; color: var(--text-secondary); cursor: pointer; user-select: none; margin-right: 8px;">
+          <input type="checkbox" id="chunks-only-toggle" onchange="renderJobs(window.__lastJobs || [])" style="cursor: pointer; accent-color: var(--primary);">
+          <span>🧩 Chunks ZIP only (docling_chunks.json)</span>
+        </label>
         <button class="btn btn-secondary" onclick="fetchJobs()">🔄 Refresh</button>
         <button class="btn btn-danger" onclick="clearAllJobs()">🗑️ Clear All</button>
       </div>
@@ -1085,6 +1194,17 @@ WEB_UI_HTML = """<!DOCTYPE html>
     let currentPreviewData = null;
     let activeTab = 'redacted';
     let pollInterval = 2000;
+    let selectedParserEngine = 'mineru';
+
+    function selectParserEngine(engine) {
+      selectedParserEngine = engine;
+      document.getElementById('opt-mineru').classList.toggle('active', engine === 'mineru');
+      document.getElementById('opt-marker').classList.toggle('active', engine === 'marker');
+      const stepText = engine === 'marker' ? '3. Marker Parse' : '3. MinerU Parse';
+      const el = document.getElementById('flow-parse-step');
+      if (el) el.innerText = stepText;
+      showToast(`Selected Parser: ${engine === 'marker' ? 'Marker' : 'MinerU'}`);
+    }
 
     // Toast helper
     function showToast(msg) {
@@ -1120,22 +1240,24 @@ WEB_UI_HTML = """<!DOCTYPE html>
     }
 
     async function uploadFiles(files) {
+      const allowedExts = ['.pdf', '.docx', '.pptx', '.xlsx', '.html', '.htm'];
       const formData = new FormData();
-      let pdfCount = 0;
+      let validCount = 0;
       for (let i = 0; i < files.length; i++) {
-        if (files[i].name.toLowerCase().endsWith('.pdf')) {
+        const name = files[i].name.toLowerCase();
+        if (allowedExts.some(ext => name.endsWith(ext))) {
           formData.append('files', files[i]);
-          pdfCount++;
+          validCount++;
         }
       }
-      if (pdfCount === 0) {
-        showToast('Please select valid PDF documents.');
+      if (validCount === 0) {
+        showToast('Please select valid documents (PDF, DOCX, PPTX, XLSX, HTML).');
         return;
       }
 
-      showToast(`Uploading ${pdfCount} document(s)...`);
+      showToast(`Uploading ${validCount} document(s)...`);
       try {
-        const resp = await fetch('/api/upload', {
+        const resp = await fetch(`/api/upload?parser_engine=${selectedParserEngine}`, {
           method: 'POST',
           body: formData,
         });
@@ -1170,12 +1292,25 @@ WEB_UI_HTML = """<!DOCTYPE html>
       try {
         const resp = await fetch('/api/jobs?limit=50');
         const jobs = await resp.json();
+        window.__lastJobs = jobs || [];
+        renderJobs(window.__lastJobs);
+      } catch (e) {
+        console.error("Failed to load queue jobs:", e);
+      }
+    }
+
+    function renderJobs(jobs) {
+      try {
         const tbody = document.getElementById('jobs-table-body');
+        if (!tbody) return;
 
         if (!jobs || jobs.length === 0) {
           tbody.innerHTML = `<tr><td colspan="7" class="empty-state">No documents submitted yet. Drop a PDF above to begin processing.</td></tr>`;
           return;
         }
+
+        const chunksOnlyToggle = document.getElementById('chunks-only-toggle');
+        const isChunksOnly = chunksOnlyToggle && chunksOnlyToggle.checked;
 
         let html = '';
         jobs.forEach(job => {
@@ -1197,8 +1332,16 @@ WEB_UI_HTML = """<!DOCTYPE html>
 
           let actionsHtml = `<div class="actions-group">`;
           if (isComp) {
+            const dlUrl = isChunksOnly 
+              ? `/api/jobs/${job.id}/download?chunks_only=true` 
+              : `/api/jobs/${job.id}/download`;
+            const dlLabel = isChunksOnly ? `🧩 Chunks ZIP` : `📦 ZIP`;
+            const dlTitle = isChunksOnly 
+              ? `Download docling_chunks.json ZIP` 
+              : `Download Complete Artifact ZIP`;
+
             actionsHtml += `
-              <a href="/api/jobs/${job.id}/download" class="btn btn-primary" title="Download Complete Artifact ZIP">📦 ZIP</a>
+              <a href="${dlUrl}" class="btn btn-primary" title="${dlTitle}">${dlLabel}</a>
               <button class="btn btn-secondary" onclick="openPreview(${job.id}, '${escapeQuotes(job.file_name)}')">👁️ Preview</button>
             `;
           } else if (isProc) {
@@ -1217,12 +1360,20 @@ WEB_UI_HTML = """<!DOCTYPE html>
             ? `<div class="doc-error">${escapeQuotes(job.error_message)}</div>` 
             : '';
 
+          let engineName = (job.parser_engine || 'mineru').toLowerCase();
+          let engineBadge = engineName === 'marker'
+            ? `<span class="parser-badge badge-marker">Marker</span>`
+            : `<span class="parser-badge badge-mineru">MinerU</span>`;
+
           html += `
             <tr>
               <td>#${job.id}</td>
               <td>
                 <div class="doc-name">
-                  <span>${escapeQuotes(job.file_name)}</span>
+                  <div style="display: flex; align-items: center; gap: 8px;">
+                    ${engineBadge}
+                    <span>${escapeQuotes(job.file_name)}</span>
+                  </div>
                   ${errorHtml}
                 </div>
               </td>
@@ -1237,7 +1388,7 @@ WEB_UI_HTML = """<!DOCTYPE html>
 
         tbody.innerHTML = html;
       } catch (e) {
-        console.error('Jobs fetch error:', e);
+        console.error('Jobs render error:', e);
       }
     }
 

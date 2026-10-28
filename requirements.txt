@@ -35,6 +35,9 @@ fastapi>=0.110.0
 uvicorn>=0.20.0
 python-multipart>=0.0.9
 
+# Optional alternative markdown parser: Marker
+marker-pdf>=0.2.14
+
 # Testing & Dev
 pytest>=8.0.0
 

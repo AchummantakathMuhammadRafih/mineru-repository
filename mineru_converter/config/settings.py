@@ -11,12 +11,16 @@ try:
 except ImportError:
     pass
 
-from mineru_converter.models.enums import BackendType, ParseMethod, HybridEffort
+from mineru_converter.models.enums import BackendType, ParseMethod, HybridEffort, ParserEngine
 
 
 class ConversionConfig(BaseModel):
     """Configuration options for converting a PDF via MinerU."""
 
+    parser_engine: ParserEngine = Field(
+        default_factory=lambda: ParserEngine(os.environ.get("PARSER_ENGINE", "mineru").strip().lower()),
+        description="Parser engine to use: 'mineru' (default) or 'marker'. Fallback: PARSER_ENGINE env var."
+    )
     output_dir: Path = Field(
         default=Path("./output/mineru"),
         description="Target root directory where output artifacts will be saved."
@@ -129,6 +133,24 @@ class ConversionConfig(BaseModel):
     pii_score_threshold: Optional[float] = Field(
         default=0.4,
         description="Confidence score threshold for PII entity detection."
+    )
+
+    # Docling Hybrid Chunking
+    enable_docling_chunking: bool = Field(
+        default=True,
+        description="Convert redacted markdown into 1024-token hybrid chunks via Docling service."
+    )
+    docling_endpoint: str = Field(
+        default_factory=lambda: os.environ.get("DOCLING_ENDPOINT", "http://localhost:5001/v1/chunk/hybrid/file").strip(),
+        description="Docling service hybrid chunking endpoint URL."
+    )
+    docling_max_tokens: int = Field(
+        default=1024,
+        description="Maximum tokens per chunk for Docling hybrid chunker."
+    )
+    docling_timeout: float = Field(
+        default=300.0,
+        description="Timeout in seconds for Docling chunking API call (default: 300s / 5 minutes)."
     )
 
     dump_middle_json: bool = Field(

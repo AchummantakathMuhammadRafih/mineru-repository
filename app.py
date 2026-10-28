@@ -92,6 +92,16 @@ with st.sidebar:
     auto_refresh = st.checkbox("Auto-refresh queue", value=True)
 
     st.divider()
+    st.subheader("⚙️ Parser Engine")
+    parser_choice = st.radio(
+        "Select Parser",
+        options=["MinerU", "Marker"],
+        index=0,
+        help="Choose between MinerU (Full AST & Layout) or Marker (Direct Markdown conversion)."
+    )
+    selected_engine = parser_choice.lower()
+
+    st.divider()
     st.subheader("📑 Heading Hierarchy")
     use_llm_toggle = st.checkbox(
         "Use Azure OpenAI for Headings",
@@ -145,11 +155,11 @@ if "uploader_key" not in st.session_state:
 # 1. Upload Card
 with st.container():
     uploaded_files = st.file_uploader(
-        "Upload PDF documents (files are saved directly to input/ folder for FIFO processing):",
-        type=["pdf"],
+        "Upload documents (PDF, DOCX, PPTX, XLSX, HTML):",
+        type=["pdf", "docx", "pptx", "xlsx", "html", "htm"],
         accept_multiple_files=True,
-        key=f"pdf_uploader_{st.session_state['uploader_key']}",
-        help="Upload one or multiple PDFs. The background watcher processes them strictly one at a time.",
+        key=f"doc_uploader_{st.session_state['uploader_key']}",
+        help="Upload one or multiple documents. The background watcher processes them strictly one at a time.",
     )
 
     if uploaded_files:
@@ -159,7 +169,7 @@ with st.container():
             if not target_path.exists():
                 with open(target_path, "wb") as f:
                     f.write(uploaded_file.getbuffer())
-                db.register_or_get_job(target_path, file_size=uploaded_file.size)
+                db.register_or_get_job(target_path, file_size=uploaded_file.size, parser_engine=selected_engine)
                 saved_count += 1
 
         if saved_count > 0:
@@ -227,6 +237,13 @@ with queue_col2:
 
 jobs = db.list_jobs(limit=100)
 
+dl_opt_col1, dl_opt_col2 = st.columns([2, 1])
+chunks_only_zip = dl_opt_col1.checkbox(
+    "🧩 Download Chunks ZIP only (docling_chunks.json)",
+    value=False,
+    help="When checked, ZIP download includes only outputs/docling_chunks.json. When unchecked, includes all artifacts and original file."
+)
+
 queue_container = st.container()
 
 with queue_container:
@@ -255,11 +272,13 @@ with queue_container:
             # ID
             row_cols[0].write(f"#{job_id}")
 
-            # Name with error tooltip if failed
+            # Name with error tooltip if failed and engine badge
+            eng = (job.get("parser_engine") or "mineru").upper()
+            eng_color = "green" if eng == "MARKER" else "blue"
             if status == JobStatus.FAILED:
-                row_cols[1].markdown(f"**{file_name}**  \n:red[Error: {job.get('error_message') or 'Conversion failed'}]")
+                row_cols[1].markdown(f":{eng_color}[`[{eng}]`] **{file_name}**  \n:red[Error: {job.get('error_message') or 'Conversion failed'}]")
             else:
-                row_cols[1].markdown(f"**{file_name}**")
+                row_cols[1].markdown(f":{eng_color}[`[{eng}]`] **{file_name}**")
 
             # Status badge with granular pipeline step
             badge_class = {
@@ -284,16 +303,21 @@ with queue_container:
                 original_file = Path(job["file_path"])
                 stem_name = Path(file_name).stem
                 zip_filename = f"{stem_name}.zip"
+                btn_label = "🧩 Chunks ZIP" if chunks_only_zip else "📦 Download ZIP"
 
                 if output_dir.exists():
                     try:
-                        zip_bytes = create_job_zip(output_dir=output_dir, original_file_path=original_file)
+                        zip_bytes = create_job_zip(
+                            output_dir=output_dir,
+                            original_file_path=original_file,
+                            chunks_only=chunks_only_zip,
+                        )
                         row_cols[5].download_button(
-                            label="📦 Download ZIP",
+                            label=btn_label,
                             data=zip_bytes,
                             file_name=zip_filename,
                             mime="application/zip",
-                            key=f"dl_{job_id}",
+                            key=f"dl_{job_id}_{chunks_only_zip}",
                         )
                     except Exception as zip_err:
                         row_cols[5].error("Zip error")
@@ -339,12 +363,15 @@ with queue_container:
                 redacted_md = out_path / f"{stem}_redacted.md"
                 raw_md = out_path / f"{stem}.md"
 
-                if clean_md.exists() or redacted_md.exists() or raw_md.exists():
+                chunks_json_file = out_path / "docling_chunks.json"
+
+                if clean_md.exists() or redacted_md.exists() or raw_md.exists() or chunks_json_file.exists():
                     with st.expander(f"👁️ Preview Document Artifacts (#{job_id} - {file_name})", expanded=False):
-                        tab_redacted, tab_clean, tab_raw = st.tabs([
+                        tab_redacted, tab_clean, tab_raw, tab_chunks = st.tabs([
                             "🛡️ Redacted Markdown (Presidio)",
                             "✨ Clean Markdown (Hierarchy)",
                             "📄 Raw MinerU Markdown",
+                            "🧩 Docling Hybrid Chunks (JSON)",
                         ])
                         with tab_redacted:
                             if redacted_md.exists():
@@ -385,6 +412,19 @@ with queue_container:
                                 st.markdown(raw_text)
                             else:
                                 st.info("Raw markdown not found for this document.")
+                        with tab_chunks:
+                            if chunks_json_file.exists():
+                                chunks_text = chunks_json_file.read_text(encoding="utf-8", errors="replace")
+                                st.download_button(
+                                    "📥 Download docling_chunks.json",
+                                    data=chunks_text,
+                                    file_name="docling_chunks.json",
+                                    mime="application/json",
+                                    key=f"dl_chunks_{job_id}",
+                                )
+                                st.json(chunks_text)
+                            else:
+                                st.info("docling_chunks.json not generated for this document.")
 
 # Auto-refresh loop
 if auto_refresh:

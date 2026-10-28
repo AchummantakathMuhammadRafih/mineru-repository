@@ -8,18 +8,20 @@ Features:
 4. Generates a new redacted markdown file (_redacted.md).
 """
 
+import re
 from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 try:
-    from presidio_analyzer import AnalyzerEngine
+    from presidio_analyzer import AnalyzerEngine, RecognizerResult
     from presidio_anonymizer import AnonymizerEngine
     from presidio_anonymizer.entities import OperatorConfig
     PRESIDIO_AVAILABLE = True
 except ImportError:
     PRESIDIO_AVAILABLE = False
     AnalyzerEngine = None
+    RecognizerResult = None
     AnonymizerEngine = None
     OperatorConfig = None
 
@@ -119,6 +121,31 @@ def redact_markdown_text(
         language=nlp_lang,
         score_threshold=score_threshold,
     )
+    if results is None:
+        results = []
+
+    # Supplement: Detect person names in download watermarks e.g. "Downloaded by \[Name\] at" or "Downloaded by Name at"
+    # Escaped brackets (\[...\]) often cause spaCy NER tokenizers to miss person entities
+    if target_entities is None or "PERSON" in target_entities:
+        watermark_pattern = re.compile(
+            r'Downloaded\s+by\s*\\?\[?(?P<name>[A-Za-z\s\.\'-]+?)\\?\]?\s+at',
+            re.IGNORECASE
+        )
+        for match in watermark_pattern.finditer(markdown_text):
+            name_str = match.group("name").strip()
+            # Only consider valid name strings (at least 2 letters, reasonable length)
+            if len(name_str) >= 2 and any(c.isalpha() for c in name_str):
+                start_idx, end_idx = match.start("name"), match.end("name")
+                # Avoid overlapping duplicate results
+                if not any(r.start <= start_idx and r.end >= end_idx for r in results):
+                    results.append(
+                        RecognizerResult(
+                            entity_type="PERSON",
+                            start=start_idx,
+                            end=end_idx,
+                            score=0.95,
+                        )
+                    )
 
     if not results:
         return markdown_text, {

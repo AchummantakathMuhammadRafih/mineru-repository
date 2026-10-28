@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
-from mineru_converter.config.constants import DEFAULT_OUTPUT_DIR, SUPPORTED_PDF_EXTENSIONS
+from mineru_converter.config.constants import DEFAULT_OUTPUT_DIR, SUPPORTED_DOC_EXTENSIONS, SUPPORTED_PDF_EXTENSIONS
 from mineru_converter.config.settings import ConversionConfig
 from mineru_converter.core.converter import MinerUConverter
 from mineru_converter.core.database import JobDatabase, JobStatus, JobStep
@@ -108,7 +108,7 @@ class QueueWorker:
         registered_count = 0
         candidates = []
         for entry in self.input_dir.iterdir():
-            if entry.is_file() and entry.suffix.lower() in SUPPORTED_PDF_EXTENSIONS:
+            if entry.is_file() and entry.suffix.lower() in SUPPORTED_DOC_EXTENSIONS:
                 if not entry.name.startswith((".", "~$")):
                     candidates.append(entry)
 
@@ -129,7 +129,7 @@ class QueueWorker:
 
         return registered_count
 
-    def submit_file(self, file_path: Path) -> Dict[str, Any]:
+    def submit_file(self, file_path: Path, parser_engine: str = "mineru") -> Dict[str, Any]:
         """
         Submit a newly uploaded file to the processing queue.
         Registers the job in SQLite and enqueues it for the worker thread.
@@ -141,9 +141,14 @@ class QueueWorker:
         except Exception:
             sha256 = None
 
-        job = self.db.register_or_get_job(p, file_hash=sha256, file_size=file_size)
+        job = self.db.register_or_get_job(
+            p,
+            file_hash=sha256,
+            file_size=file_size,
+            parser_engine=parser_engine or "mineru",
+        )
         self._queue.put(job["id"])
-        logger.info(f"📥 Enqueued job #{job['id']} for file: {p.name}")
+        logger.info(f"📥 Enqueued job #{job['id']} (engine={job.get('parser_engine', 'mineru')}) for file: {p.name}")
         return job
 
     def _worker_loop(self) -> None:
@@ -209,6 +214,16 @@ class QueueWorker:
             logger.info(f"🔄 [Job #{job_id}] Progress step: {step_name}")
 
         try:
+            # Check if this specific job requests a particular parser engine
+            job_engine_str = job.get("parser_engine")
+            if job_engine_str:
+                try:
+                    from mineru_converter.models.enums import ParserEngine
+                    target_engine = ParserEngine(job_engine_str.lower())
+                    self.converter.config.parser_engine = target_engine
+                except Exception:
+                    pass
+
             # Execute conversion (Pipeline: Parse -> Hierarchy Correction -> Presidio Redaction)
             result = self.converter.convert(file_path, step_callback=_step_callback)
             duration = time.time() - start_time

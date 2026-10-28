@@ -3,6 +3,12 @@
 from enum import Enum
 
 
+class ParserEngine(str, Enum):
+    """Supported conversion parser engines."""
+    MINERU = "mineru"
+    MARKER = "marker"
+
+
 class BackendType(str, Enum):
     """Available processing backends for MinerU."""
     PIPELINE = "pipeline"

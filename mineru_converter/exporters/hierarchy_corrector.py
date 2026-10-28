@@ -17,6 +17,7 @@ import copy
 import json
 import os
 from pathlib import Path
+import re
 import sys
 import time
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -861,6 +862,13 @@ def convert_v2_to_markdown(
                     s.get("content", "") for s in para_spans if isinstance(s, dict)
                 ).strip()
                 if text:
+                    # Filter out publisher download watermarks if filter_headers_footers is True
+                    if filter_headers_footers and re.search(
+                        r'^\s*Downloaded\s+by\s*\\?\[?.*?\\?\]?\s+at\s+\d{1,2}:\d{2}',
+                        text,
+                        re.IGNORECASE,
+                    ):
+                        continue
                     md_blocks.append(text)
 
             elif block_type == "page_footnote":

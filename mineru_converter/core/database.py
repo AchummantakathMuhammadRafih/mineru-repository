@@ -53,6 +53,7 @@ class JobDatabase:
                     file_size INTEGER,
                     status TEXT NOT NULL,
                     current_step TEXT DEFAULT 'QUEUED',
+                    parser_engine TEXT DEFAULT 'mineru',
                     output_dir TEXT,
                     markdown_file TEXT,
                     error_message TEXT,
@@ -67,6 +68,13 @@ class JobDatabase:
             try:
                 conn.execute(
                     "ALTER TABLE conversion_jobs ADD COLUMN current_step TEXT DEFAULT 'QUEUED'"
+                )
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                conn.execute(
+                    "ALTER TABLE conversion_jobs ADD COLUMN parser_engine TEXT DEFAULT 'mineru'"
                 )
             except sqlite3.OperationalError:
                 pass
@@ -129,6 +137,7 @@ class JobDatabase:
         file_path: Path,
         file_hash: Optional[str] = None,
         file_size: Optional[int] = None,
+        parser_engine: str = "mineru",
     ) -> Dict[str, Any]:
         resolved = str(file_path.resolve())
         with self._get_connection() as conn:
@@ -144,8 +153,8 @@ class JobDatabase:
             cur = conn.execute(
                 """
                 INSERT INTO conversion_jobs (
-                    file_name, file_path, file_hash, file_size, status, current_step, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    file_name, file_path, file_hash, file_size, status, current_step, parser_engine, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     file_path.name,
@@ -154,6 +163,7 @@ class JobDatabase:
                     file_size or 0,
                     JobStatus.PENDING,
                     JobStep.QUEUED,
+                    parser_engine or "mineru",
                     now_iso,
                 ),
             )

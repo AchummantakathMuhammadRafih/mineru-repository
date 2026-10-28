@@ -5,7 +5,11 @@ from pathlib import Path
 
 # Supported input extensions
 SUPPORTED_PDF_EXTENSIONS = {".pdf"}
-SUPPORTED_DOC_EXTENSIONS = {".pdf", ".docx", ".pptx", ".xlsx", ".png", ".jpg", ".jpeg", ".webp"}
+SUPPORTED_DOC_EXTENSIONS = {".pdf", ".docx", ".pptx", ".xlsx", ".html", ".htm", ".png", ".jpg", ".jpeg", ".webp"}
+
+class ParserEngine(str, Enum):
+    MINERU = "mineru"
+    MARKER = "marker"
 
 # Supported Backend Types
 class BackendType(str, Enum):
